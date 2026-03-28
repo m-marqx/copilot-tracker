@@ -3,7 +3,18 @@
   "displayName": "Copilot Premium Request Tracker",
   "description": "Track GitHub Copilot Premium request usage with pacing progress in the status bar and a detailed analytics dashboard.",
   "version": "0.0.1",
-  "publisher": "copilot-tracker",
+  "author":"Archie Maruqes",
+  "publisher": "m-marqx",
+  "icon": "assets/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/m-marqx/copilot-tracker.git"
+  },
+  "keywords": [
+    "github copilot",
+    "premium requests",
+    "usage tracking"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
