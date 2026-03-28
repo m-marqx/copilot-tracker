@@ -1,0 +1,52 @@
+{
+  "name": "copilot-premium-tracker",
+  "displayName": "Copilot Premium Request Tracker",
+  "description": "Track GitHub Copilot Premium request usage with pacing progress in the status bar and a detailed analytics dashboard.",
+  "version": "0.0.1",
+  "publisher": "copilot-tracker",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilot-premium-tracker.showDashboard",
+        "title": "Show Copilot Premium Request Dashboard",
+        "category": "Copilot Tracker"
+      },
+      {
+        "command": "copilot-premium-tracker.addModel",
+        "title": "Add Model Usage Entry",
+        "category": "Copilot Tracker"
+      },
+      {
+        "command": "copilot-premium-tracker.setLimit",
+        "title": "Set Monthly Premium Request Limit",
+        "category": "Copilot Tracker"
+      },
+      {
+        "command": "copilot-premium-tracker.resetData",
+        "title": "Reset All Usage Data",
+        "category": "Copilot Tracker"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}
