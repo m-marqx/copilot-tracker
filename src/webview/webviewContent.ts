@@ -89,52 +89,52 @@ export function getWebviewHtml(
 
     body {
       font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-      font-size: var(--vscode-font-size, 13px);
+      font-size: var(--vscode-font-size, 0.8125rem);
       color: var(--vscode-foreground);
       background-color: var(--vscode-editor-background);
-      padding: 24px 32px;
+      padding: 1.5rem 2rem;
       line-height: 1.5;
     }
 
     .header {
-      margin-bottom: 24px;
+      margin-bottom: 1.5rem;
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
     }
 
     .header-left h1 {
-      font-size: 20px;
+      font-size: 1.25rem;
       font-weight: 600;
       color: var(--vscode-foreground);
-      margin-bottom: 4px;
+      margin-bottom: 0.25rem;
     }
 
     .header-left .subtitle {
-      font-size: 13px;
+      font-size: 0.8125rem;
       color: var(--vscode-descriptionForeground);
     }
 
     .header-right {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 0.75rem;
     }
 
     .data-source {
-      font-size: 11px;
+      font-size: 0.6875rem;
       color: var(--vscode-descriptionForeground);
       text-align: right;
     }
 
     .data-source .source-badge {
       display: inline-block;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 10px;
+      padding: 0.125rem 0.5rem;
+      border-radius: 0.75rem;
+      font-size: 0.625rem;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.03125rem;
     }
 
     .source-badge.api {
@@ -149,49 +149,49 @@ export function getWebviewHtml(
 
     .cards {
       display: flex;
-      gap: 16px;
-      margin-bottom: 24px;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
       flex-wrap: wrap;
     }
 
     .card {
       flex: 1;
-      min-width: 220px;
+      min-width: 13.75rem;
       background-color: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
       border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
-      border-radius: 8px;
-      padding: 20px;
+      border-radius: 0.5rem;
+      padding: 1.25rem;
     }
 
     .card-label {
-      font-size: 12px;
+      font-size: 0.75rem;
       color: var(--vscode-descriptionForeground);
-      margin-bottom: 8px;
+      margin-bottom: 0.5rem;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.03125rem;
       font-weight: 500;
     }
 
     .card-value {
-      font-size: 28px;
+      font-size: 1.75rem;
       font-weight: 600;
       color: var(--vscode-foreground);
-      margin-bottom: 4px;
+      margin-bottom: 0.25rem;
     }
 
     .card-value.small {
-      font-size: 22px;
+      font-size: 1.375rem;
     }
 
     .card-detail {
-      font-size: 12px;
+      font-size: 0.75rem;
       color: var(--vscode-descriptionForeground);
     }
 
     .card-link {
       color: var(--vscode-textLink-foreground);
       text-decoration: none;
-      font-size: 12px;
+      font-size: 0.75rem;
       cursor: pointer;
     }
 
@@ -201,14 +201,14 @@ export function getWebviewHtml(
     }
 
     .progress-container {
-      margin-top: 12px;
+      margin-top: 0.75rem;
     }
 
     .progress-bar-bg {
       width: 100%;
-      height: 8px;
+      height: 0.5rem;
       background-color: var(--vscode-progressBar-background, rgba(128,128,128,0.2));
-      border-radius: 4px;
+      border-radius: 0.25rem;
       overflow: hidden;
       position: relative;
     }
@@ -221,12 +221,12 @@ export function getWebviewHtml(
       width: 100%;
       height: 100%;
       background-color: var(--vscode-input-background, rgba(128,128,128,0.15));
-      border-radius: 4px;
+      border-radius: 0.25rem;
     }
 
     .progress-bar-fill {
       height: 100%;
-      border-radius: 4px;
+      border-radius: 0.25rem;
       position: relative;
       z-index: 1;
       transition: width 0.3s ease;
@@ -248,19 +248,19 @@ export function getWebviewHtml(
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-top: 8px;
+      margin-top: 0.5rem;
     }
 
     .progress-meta span {
-      font-size: 12px;
+      font-size: 0.75rem;
       color: var(--vscode-descriptionForeground);
     }
 
     .pacing-badge {
       display: inline-block;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 11px;
+      padding: 0.125rem 0.5rem;
+      border-radius: 0.75rem;
+      font-size: 0.6875rem;
       font-weight: 600;
     }
 
@@ -283,61 +283,61 @@ export function getWebviewHtml(
     .daily-budget {
       background-color: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
       border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 24px;
+      border-radius: 0.5rem;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
     }
 
     .daily-budget h2 {
-      font-size: 16px;
+      font-size: 1rem;
       font-weight: 600;
-      margin-bottom: 16px;
+      margin-bottom: 1rem;
       color: var(--vscode-foreground);
     }
 
     .daily-budget .status-line {
       font-size: 1rem;
-      margin-bottom: 12px;
+      margin-bottom: 0.75rem;
     }
 
     .daily-budget .hero-number {
-      font-size: 24px;
+      font-size: 1.5rem;
       font-weight: 600;
       color: var(--vscode-foreground);
-      margin-bottom: 16px;
+      margin-bottom: 1rem;
     }
 
     .rate-chart {
-      margin: 16px 0;
+      margin: 1rem 0;
       font-family: var(--vscode-editor-font-family, 'Cascadia Code', Consolas, monospace);
-      font-size: 12px;
+      font-size: 0.75rem;
     }
 
     .rate-row {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 6px;
+      gap: 0.5rem;
+      margin-bottom: 0.375rem;
     }
 
     .rate-label {
-      width: 80px;
+      width: 5rem;
       text-align: right;
       color: var(--vscode-descriptionForeground);
-      font-size: 11px;
+      font-size: 0.6875rem;
     }
 
     .rate-bar-bg {
       flex: 1;
-      height: 16px;
+      height: 1rem;
       background-color: var(--vscode-input-background, rgba(128,128,128,0.15));
-      border-radius: 3px;
+      border-radius: 0.1875rem;
       overflow: hidden;
     }
 
     .rate-bar-fill {
       height: 100%;
-      border-radius: 3px;
+      border-radius: 0.1875rem;
       transition: width 0.3s ease;
     }
 
@@ -354,28 +354,28 @@ export function getWebviewHtml(
     }
 
     .rate-value {
-      width: 90px;
-      font-size: 12px;
+      width: 5.625rem;
+      font-size: 0.75rem;
       color: var(--vscode-foreground);
     }
 
     .rate-value .indicator {
-      font-size: 10px;
+      font-size: 0.625rem;
       color: var(--vscode-descriptionForeground);
     }
 
     .metrics-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 12px;
-      margin-top: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
+      gap: 0.75rem;
+      margin-top: 1rem;
     }
 
     .metric-item {
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-size: 12px;
+      gap: 0.5rem;
+      font-size: 0.75rem;
       color: var(--vscode-descriptionForeground);
     }
 
@@ -385,24 +385,25 @@ export function getWebviewHtml(
     }
 
     .table-section {
-      margin-top: 8px;
+      margin-top: 0.5rem;
     }
 
     .table-header {
       display: flex;
       justify-content: space-between;
       align-items: baseline;
-      margin-bottom: 12px;
+      margin-bottom: 0.75rem;
+      gap: 0.5rem;
     }
 
     .table-header h2 {
-      font-size: 16px;
+      font-size: 1rem;
       font-weight: 600;
       color: var(--vscode-foreground);
     }
 
     .table-header .date-range {
-      font-size: 12px;
+      font-size: 0.75rem;
       color: var(--vscode-descriptionForeground);
     }
 
@@ -413,13 +414,13 @@ export function getWebviewHtml(
 
     thead th {
       text-align: left;
-      font-size: 11px;
+      font-size: 0.6875rem;
       font-weight: 600;
       color: var(--vscode-descriptionForeground);
       text-transform: uppercase;
-      letter-spacing: 0.5px;
-      padding: 8px 12px;
-      border-bottom: 2px solid var(--vscode-panel-border, var(--vscode-widget-border));
+      letter-spacing: 0.03125rem;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 0.125rem solid var(--vscode-panel-border, var(--vscode-widget-border));
     }
 
     thead th.num {
@@ -427,9 +428,9 @@ export function getWebviewHtml(
     }
 
     tbody td {
-      padding: 10px 12px;
-      font-size: 13px;
-      border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, rgba(128,128,128,0.2)));
+      padding: 0.625rem 0.75rem;
+      font-size: 0.8125rem;
+      border-bottom: 0.0625rem solid var(--vscode-panel-border, var(--vscode-widget-border, rgba(128,128,128,0.2)));
     }
 
     tbody td.model-name {
@@ -449,10 +450,10 @@ export function getWebviewHtml(
     }
 
     tfoot td {
-      padding: 10px 12px;
-      font-size: 13px;
+      padding: 0.625rem 0.75rem;
+      font-size: 0.8125rem;
       font-weight: 600;
-      border-top: 2px solid var(--vscode-panel-border, var(--vscode-widget-border));
+      border-top: 0.125rem solid var(--vscode-panel-border, var(--vscode-widget-border));
       color: var(--vscode-foreground);
     }
 
@@ -469,10 +470,10 @@ export function getWebviewHtml(
       background: none;
       border: none;
       cursor: pointer;
-      padding: 2px 6px;
-      font-size: 13px;
+      padding: 0.125rem 0.375rem;
+      font-size: 0.8125rem;
       color: var(--vscode-descriptionForeground);
-      border-radius: 4px;
+      border-radius: 0.25rem;
       line-height: 1;
     }
 
@@ -487,9 +488,9 @@ export function getWebviewHtml(
 
     .empty-state {
       text-align: center;
-      padding: 32px 16px;
+      padding: 2rem 1rem;
       color: var(--vscode-descriptionForeground);
-      font-size: 13px;
+      font-size: 0.8125rem;
     }
 
     .empty-state a {
@@ -498,39 +499,39 @@ export function getWebviewHtml(
 
     /* Add Model Form */
     .add-form {
-      margin-top: 24px;
+      margin-top: 1.5rem;
       background-color: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
       border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
-      border-radius: 8px;
-      padding: 20px;
+      border-radius: 0.5rem;
+      padding: 1.25rem;
     }
 
     .add-form h3 {
       font-size: 1rem;
       font-weight: 600;
-      margin-bottom: 16px;
+      margin-bottom: 1rem;
       color: var(--vscode-foreground);
     }
 
     .form-row {
       display: flex;
-      gap: 12px;
+      gap: 0.75rem;
       flex-wrap: wrap;
-      margin-bottom: 12px;
+      margin-bottom: 0.75rem;
       align-items: end;
     }
 
     .form-group {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 0.25rem;
     }
 
     .form-group label {
-      font-size: 11px;
+      font-size: 0.6875rem;
       color: var(--vscode-descriptionForeground);
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.03125rem;
       font-weight: 500;
     }
 
@@ -538,9 +539,9 @@ export function getWebviewHtml(
       background-color: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
       border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-      border-radius: 4px;
-      padding: 6px 10px;
-      font-size: 13px;
+      border-radius: 0.25rem;
+      padding: 0.375rem 0.625rem;
+      font-size: 0.8125rem;
       font-family: inherit;
       outline: none;
     }
@@ -549,12 +550,12 @@ export function getWebviewHtml(
       border-color: var(--vscode-focusBorder);
     }
 
-    .form-group input[type="text"] {
-      min-width: 200px;
+    .form-group input[type=\"text\"] {
+      min-width: 12.5rem;
     }
 
-    .form-group input[type="number"] {
-      width: 120px;
+    .form-group input[type=\"number\"] {
+      width: 7.5rem;
     }
 
     .currency-wrapper {
@@ -565,16 +566,16 @@ export function getWebviewHtml(
 
     .currency-wrapper .currency-prefix {
       position: absolute;
-      left: 10px;
-      font-size: 13px;
+      left: 0.625rem;
+      font-size: 0.8125rem;
       color: var(--vscode-descriptionForeground);
       pointer-events: none;
       z-index: 1;
     }
 
     .currency-wrapper input {
-      padding-left: 22px !important;
-      width: 120px;
+      padding-left: 1.375rem !important;
+      width: 7.5rem;
     }
 
     .currency-wrapper input[readonly] {
@@ -583,9 +584,9 @@ export function getWebviewHtml(
     }
 
     .btn {
-      padding: 6px 16px;
-      border-radius: 4px;
-      font-size: 13px;
+      padding: 0.375rem 1rem;
+      border-radius: 0.25rem;
+      font-size: 0.8125rem;
       font-family: inherit;
       cursor: pointer;
       border: none;
@@ -613,18 +614,18 @@ export function getWebviewHtml(
     .limit-edit {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 0.375rem;
     }
 
     .limit-edit input {
       background-color: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
       border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-      border-radius: 4px;
-      padding: 2px 8px;
+      border-radius: 0.25rem;
+      padding: 0.125rem 0.5rem;
       font-size: 1rem;
       font-family: inherit;
-      width: 80px;
+      width: 5rem;
       outline: none;
       font-weight: 600;
     }
@@ -635,7 +636,7 @@ export function getWebviewHtml(
 
     .form-buttons {
       display: flex;
-      gap: 8px;
+      gap: 0.5rem;
       align-items: end;
     }
 
@@ -644,12 +645,12 @@ export function getWebviewHtml(
       user-select: none;
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 0.375rem;
     }
 
     .collapsible-toggle .arrow {
       transition: transform 0.2s;
-      font-size: 10px;
+      font-size: 0.625rem;
     }
 
     .collapsible-toggle .arrow.open {
@@ -666,9 +667,40 @@ export function getWebviewHtml(
       max-height: 2000px;
     }
 
-    @media (max-width: 600px) {
+    /* Visual hint for manual billing source */
+    .manual-hint {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.6875rem;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    .manual-link {
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      text-decoration: underline;
+      font-weight: 600;
+    }
+
+    .manual-link.pulse {
+      animation: pulse 1s ease;
+    }
+
+    .collapsible-content.highlight {
+      box-shadow: 0 0 0.5rem rgba(88,166,255,0.15);
+      border-radius: 0.25rem;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+      100% { transform: scale(1); }
+    }
+
+    @media (max-width: 37.5rem) {
       body {
-        padding: 16px;
+        padding: 1rem;
       }
       .cards {
         flex-direction: column;
@@ -764,6 +796,10 @@ export function getWebviewHtml(
       <h2 class="collapsible-toggle" id="tableToggle">
         <span class="arrow" id="tableArrow">&#9656;</span> Manual usage breakdown
       </h2>
+      <div class="manual-hint">
+        <span>Manual entries should match premium requests usage</span>
+        <a id="billingLink" class="manual-link" title="Open GitHub billing page">Open billing</a>
+      </div>
       <span class="date-range">${escapeHtml(dateRange)}</span>
     </div>
     <div class="collapsible-content" id="tableContent">
@@ -777,7 +813,7 @@ export function getWebviewHtml(
             <th class="num">Billed requests</th>
             <th class="num">Gross amount</th>
             <th class="num">Billed amount</th>
-            <th style="width: 70px;"></th>
+            <th style="width: 4.375rem;"></th>
           </tr>
         </thead>
         <tbody>
@@ -846,9 +882,20 @@ export function getWebviewHtml(
     const tableToggle = document.getElementById('tableToggle');
     const tableArrow = document.getElementById('tableArrow');
     const tableContent = document.getElementById('tableContent');
+
+    // restore persisted open state (keeps the collapsible open across refreshes)
+    const __state = vscode.getState() || {};
+    if (__state.tableOpen) {
+      tableContent.classList.add('open');
+      tableArrow.classList.add('open');
+    }
+
     tableToggle.addEventListener('click', () => {
       tableContent.classList.toggle('open');
       tableArrow.classList.toggle('open');
+      const s = vscode.getState() || {};
+      s.tableOpen = tableContent.classList.contains('open');
+      vscode.setState(s);
     });
 
     // Limit editing
@@ -906,6 +953,10 @@ export function getWebviewHtml(
           tableContent.classList.add('open');
           tableArrow.classList.add('open');
         }
+        // persist open state so UI remains open after extension refresh
+        const _s = vscode.getState() || {};
+        _s.tableOpen = true;
+        vscode.setState(_s);
         editingModel = btn.getAttribute('data-model');
         modelNameInput.value = editingModel;
         modelNameInput.readOnly = true;
@@ -923,6 +974,20 @@ export function getWebviewHtml(
     cancelBtn.addEventListener('click', () => {
       resetForm();
     });
+
+    // Billing link: open GitHub billing page and show visual cue
+    const billingLinkEl = document.getElementById('billingLink');
+    if (billingLinkEl) {
+      billingLinkEl.addEventListener('click', (e) => {
+        e.preventDefault();
+        const url = 'https://github.com/settings/billing/premium_requests_usage';
+        vscode.postMessage({ type: 'openExternal', url });
+        billingLinkEl.classList.add('pulse');
+        tableContent.classList.add('highlight');
+        setTimeout(() => billingLinkEl.classList.remove('pulse'), 1100);
+        setTimeout(() => tableContent.classList.remove('highlight'), 1200);
+      });
+    }
 
     function resetForm() {
       editingModel = null;
@@ -951,6 +1016,11 @@ export function getWebviewHtml(
         grossAmount: parseFloat(grossInput.value) || 0,
         billedAmount: parseFloat(billedAmtInput.value.replace(/[^0-9.\\-]/g, '')) || 0,
       };
+      // persist that the table should stay open across rerenders
+      const _s2 = vscode.getState() || {};
+      _s2.tableOpen = true;
+      vscode.setState(_s2);
+
       if (editingModel) {
         vscode.postMessage({ type: 'editModel', model });
       } else {

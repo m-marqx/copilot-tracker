@@ -125,6 +125,17 @@ async function handleWebviewMessage(
       }
       break;
     }
+    case 'openExternal': {
+      const url = msg.url as string;
+      if (url) {
+        try {
+          await vscode.env.openExternal(vscode.Uri.parse(url));
+        } catch (e) {
+          // ignore errors opening external links
+        }
+      }
+      break;
+    }
     case 'editModel': {
       const model = msg.model as UsageModel;
       if (model?.model) {
