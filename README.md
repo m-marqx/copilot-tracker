@@ -3,7 +3,7 @@
 Track your GitHub Copilot premium request usage directly from VS Code — with real-time pacing in the status bar and a full analytics dashboard.
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-^1.85.0-blue)
-![Version](https://img.shields.io/badge/version-0.0.2-green)
+![Version](https://img.shields.io/badge/version-0.0.3-green)
 
 ## Features
 
