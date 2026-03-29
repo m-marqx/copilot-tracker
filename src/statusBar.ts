@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { UsageData } from './dataService';
-import { getDailyPacingProgress, getRecommendedPercentage } from './pacing';
+import { calculatePacing, classifyStatus, getDailyPacingProgress, getRecommendedPercentage } from './pacing';
 
 export function createStatusBarItem(): vscode.StatusBarItem {
   const item = vscode.window.createStatusBarItem(
@@ -14,7 +14,12 @@ export function createStatusBarItem(): vscode.StatusBarItem {
 }
 
 export function updateStatusBar(item: vscode.StatusBarItem, data: UsageData): void {
-  const { totalUsage, limit } = data;
+  const { totalUsage, limit, remaining } = data;
+  const pacing = calculatePacing(totalUsage, limit, new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000), remaining);
+  const status = classifyStatus(pacing);
+
+  const allowance = pacing.dailyAllowance;
+  const mult = pacing.multiplier;
 
   // Daily pacing progress (0–1, clamped)
   const dailyProgress = getDailyPacingProgress(totalUsage, limit);
@@ -29,19 +34,32 @@ export function updateStatusBar(item: vscode.StatusBarItem, data: UsageData): vo
 
   item.text = `$(copilot) [${bar}] ${actualPct}% / ${targetPct}%`;
 
-  // Color thresholds based on overall pacing
-  const overallPacing = totalUsage / (getRecommendedPercentage() * limit) || 0;
-
-  if (overallPacing > 1.0) {
+  // Color based on status
+  if (status === 'exhausted' || pacing.overageCost > 0) {
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-    item.tooltip = `Copilot Premium: Over pace! ${actualPct}% used vs ${targetPct}% target.`;
-  } else if (overallPacing > 0.8) {
+  } else if (status === 'over-budget') {
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-    item.tooltip = `Copilot Premium: Nearing pace limit. ${actualPct}% used vs ${targetPct}% target.`;
   } else {
     item.backgroundColor = undefined;
-    item.tooltip = `Copilot Premium: ${actualPct}% used vs ${targetPct}% target. On track.`;
   }
+
+  // Rich tooltip
+  const usedPct = ((totalUsage / limit) * 100).toFixed(1);
+  const formattedPacingBanked = pacing.banked.toFixed(1);
+  const bankedStr = pacing.banked >= 0
+    ? `+${formattedPacingBanked} saved`
+    : `${formattedPacingBanked} overspent`;
+  const sourceLabel = data.dataSource === 'api' ? 'Live from API' : 'Manual data';
+
+  item.tooltip = [
+    `Copilot Premium: ${totalUsage} / ${limit} (${usedPct}%)`,
+    `Daily allowance: ${allowance} requests/day`,
+    `${bankedStr} vs expected`,
+    `Projected: ~${pacing.projectedEnd.toFixed(1)} by month end`,
+    `Day ${pacing.dayOfMonth}/${pacing.daysInMonth} · ${pacing.daysRemaining} days left`,
+    `Source: ${sourceLabel}`,
+    `actual vs target: ${actualPct}% used vs ${targetPct}% target`,
+  ].join('\n');
 
   item.show();
 }

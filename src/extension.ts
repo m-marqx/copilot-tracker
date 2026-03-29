@@ -1,22 +1,39 @@
 import * as vscode from 'vscode';
-import { ManualDataService, UsageModel } from './dataService';
+import { DataService, UsageModel } from './dataService';
+import { TokenExpiredError, RateLimitError } from './api';
 import { createStatusBarItem, updateStatusBar } from './statusBar';
 import { showDashboard, disposeDashboard, setMessageHandler } from './webview/webviewProvider';
 
 let statusBarItem: vscode.StatusBarItem;
-let dataService: ManualDataService;
+let dataService: DataService;
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
+
+const REFRESH_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  dataService = new ManualDataService(context.globalState);
+  dataService = new DataService(context.globalState);
   statusBarItem = createStatusBarItem();
 
-  refreshUI();
+  // Initial fetch from API (silent, no prompt)
+  await refreshFromApi(false);
+
+  // Auto-refresh timer
+  refreshTimer = setInterval(() => refreshFromApi(false), REFRESH_INTERVAL_MS);
 
   const showCmd = vscode.commands.registerCommand(
     'copilot-premium-tracker.showDashboard',
     () => {
       showDashboard(dataService.getUsageData(), context.extensionUri);
       setMessageHandler(async (msg) => handleWebviewMessage(msg, context));
+    },
+  );
+
+  const refreshCmd = vscode.commands.registerCommand(
+    'copilot-premium-tracker.refresh',
+    async () => {
+      dataService.clearCache();
+      await refreshFromApi(true);
+      refreshDashboard(context);
     },
   );
 
@@ -46,9 +63,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   );
 
-  context.subscriptions.push(statusBarItem, showCmd, addModelCmd, setLimitCmd, resetCmd, {
-    dispose: () => disposeDashboard(),
-  });
+  context.subscriptions.push(
+    statusBarItem, showCmd, refreshCmd, addModelCmd, setLimitCmd, resetCmd,
+    { dispose: () => { disposeDashboard(); if (refreshTimer) { clearInterval(refreshTimer); } } },
+  );
+}
+
+async function refreshFromApi(interactive: boolean): Promise<void> {
+  try {
+    await dataService.fetchFromApi(interactive);
+  } catch (e) {
+    if (e instanceof TokenExpiredError) {
+      vscode.window.showWarningMessage(
+        'Copilot Tracker: GitHub token expired. Click Refresh to sign in again.',
+      );
+    } else if (e instanceof RateLimitError) {
+      // Silently wait for rate limit to expire
+    } else if (interactive) {
+      const msg = e instanceof Error ? e.message : String(e);
+      vscode.window.showErrorMessage(`Copilot Tracker: ${msg}`);
+    }
+  }
+  refreshUI();
 }
 
 async function handleWebviewMessage(
@@ -56,6 +92,12 @@ async function handleWebviewMessage(
   context: vscode.ExtensionContext,
 ): Promise<void> {
   switch (msg.type) {
+    case 'refresh': {
+      dataService.clearCache();
+      await refreshFromApi(true);
+      refreshDashboard(context);
+      break;
+    }
     case 'addModel': {
       const model = msg.model as UsageModel;
       if (model?.model) {
