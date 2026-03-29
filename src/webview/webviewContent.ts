@@ -989,7 +989,7 @@ function escapeAttr(str: string): string {
 }
 
 function formatNumber(n: number): string {
-  return n % 1 === 0 ? n.toFixed(0) : n.toFixed(1);
+  return n % 1 === 0 ? n.toFixed(0) : n.toFixed(2);
 }
 
 function formatCurrency(n: number): string {
