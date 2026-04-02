@@ -1,9 +1,12 @@
 import * as vscode from 'vscode';
 import {
   CopilotQuota,
+  BillingUsageItem,
+  DailyBillingUsageItem,
   fetchCopilotInternalQuota,
   fetchCopilotBusinessQuota,
   fetchBillingUsage,
+  fetchDailyBillingUsage,
   fetchUsername,
   resolveToken,
   TokenExpiredError,
@@ -27,6 +30,7 @@ export interface UsageData {
   dateRange: string;
   dataSource: 'api' | 'manual';
   lastFetchedAt?: number;
+  billingItems: BillingUsageItem[];
 }
 
 const STORAGE_KEY_MODELS = 'copilotTracker.models';
@@ -37,12 +41,18 @@ export const COST_PER_REQUEST = 0.04;
 
 const MIN_FETCH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+const BILLING_TOKEN_KEY = 'copilotTracker.billingToken';
+
 export class DataService {
   private cachedQuota: CopilotQuota | null = null;
+  private cachedBillingItems: BillingUsageItem[] = [];
   private lastFetchedAt = 0;
   private lastError: string | null = null;
 
-  constructor(private readonly globalState: vscode.Memento) {}
+  constructor(
+    private readonly globalState: vscode.Memento,
+    private readonly secrets?: vscode.SecretStorage,
+  ) {}
 
   /**
    * Fetches usage data from the GitHub API.
@@ -70,6 +80,8 @@ export class DataService {
         if (quota.quota > 0) {
           await this.globalState.update(STORAGE_KEY_LIMIT, quota.quota);
         }
+        // Also fetch billing details (non-blocking)
+        this.fetchBillingItems(token).catch(() => {});
         return quota;
       }
     } catch (e) {
@@ -86,6 +98,8 @@ export class DataService {
         if (quota.quota > 0) {
           await this.globalState.update(STORAGE_KEY_LIMIT, quota.quota);
         }
+        // Also fetch billing details (non-blocking)
+        this.fetchBillingItems(token).catch(() => {});
         return quota;
       }
     } catch (e) {
@@ -100,7 +114,9 @@ export class DataService {
         await this.setUsername(username);
       }
 
-      const { usedRequests } = await fetchBillingUsage(token, username);
+      const billingToken = await this.getBillingToken() ?? token;
+      const { usedRequests, items } = await fetchBillingUsage(billingToken, username);
+      this.cachedBillingItems = items;
       const limit = this.getLimit();
       const quota: CopilotQuota = {
         used: usedRequests,
@@ -153,6 +169,7 @@ export class DataService {
       dateRange: `${fmt(monthStart)} – ${fmt(now)}`,
       dataSource,
       lastFetchedAt: this.lastFetchedAt || undefined,
+      billingItems: this.cachedBillingItems,
     };
   }
 
@@ -162,7 +179,97 @@ export class DataService {
 
   clearCache(): void {
     this.cachedQuota = null;
+    this.cachedBillingItems = [];
     this.lastFetchedAt = 0;
+  }
+
+  /** Bypass the min-fetch-interval check without discarding cached data. */
+  forceRefresh(): void {
+    this.lastFetchedAt = 0;
+  }
+
+  private async fetchBillingItems(token: string): Promise<void> {
+    try {
+      const billingToken = await this.getBillingToken() ?? token;
+      let username = this.getUsername();
+      if (!username) {
+        username = await fetchUsername(token);
+        await this.setUsername(username);
+      }
+      const { items } = await fetchBillingUsage(billingToken, username);
+      this.cachedBillingItems = items;
+    } catch {
+      // Non-blocking — billing details are optional
+    }
+  }
+
+  async getBillingToken(): Promise<string | undefined> {
+    return this.secrets?.get(BILLING_TOKEN_KEY);
+  }
+
+  async setBillingToken(token: string): Promise<void> {
+    await this.secrets?.store(BILLING_TOKEN_KEY, token);
+  }
+
+  async clearBillingToken(): Promise<void> {
+    await this.secrets?.delete(BILLING_TOKEN_KEY);
+  }
+
+  /**
+   * Fetches daily billing data for each day in [startDate, endDate]
+   * and aggregates usage items by model.
+   */
+  async fetchBillingRange(
+    startDate: string,
+    endDate: string,
+  ): Promise<DailyBillingUsageItem[]> {
+    const token = await this.getBillingToken() ?? await resolveToken(false);
+    if (!token) { throw new Error('No token available for billing API'); }
+
+    let username = this.getUsername();
+    if (!username) {
+      username = await fetchUsername(token);
+      await this.setUsername(username);
+    }
+
+    const start = new Date(startDate + 'T00:00:00');
+    const end = new Date(endDate + 'T00:00:00');
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
+      throw new Error('Invalid date range');
+    }
+
+    const aggregated = new Map<string, DailyBillingUsageItem>();
+    const current = new Date(start);
+
+    while (current <= end) {
+      const year = current.getFullYear();
+      const month = current.getMonth() + 1;
+      const day = current.getDate();
+
+      try {
+        const resp = await fetchDailyBillingUsage(token, username, year, month, day);
+        for (const item of resp.usageItems) {
+          const key = `${item.sku}::${item.model}`;
+          const existing = aggregated.get(key);
+          if (existing) {
+            existing.grossQuantity += item.grossQuantity;
+            existing.grossAmount += item.grossAmount;
+            existing.discountQuantity += item.discountQuantity;
+            existing.discountAmount += item.discountAmount;
+            existing.netQuantity += item.netQuantity;
+            existing.netAmount += item.netAmount;
+          } else {
+            aggregated.set(key, { ...item });
+          }
+        }
+      } catch {
+        // Skip days that fail (e.g. future dates, 404s)
+      }
+
+      current.setDate(current.getDate() + 1);
+    }
+
+    return Array.from(aggregated.values());
   }
 
   getModels(): UsageModel[] {
@@ -213,6 +320,7 @@ export class DataService {
     await this.globalState.update(STORAGE_KEY_LIMIT, DEFAULT_LIMIT);
     await this.globalState.update(STORAGE_KEY_USERNAME, undefined);
     this.cachedQuota = null;
+    this.cachedBillingItems = [];
     this.lastFetchedAt = 0;
     this.lastError = null;
   }

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { DataService, UsageModel } from './dataService';
 import { TokenExpiredError, RateLimitError } from './api';
 import { createStatusBarItem, updateStatusBar } from './statusBar';
-import { showDashboard, disposeDashboard, setMessageHandler } from './webview/webviewProvider';
+import { showDashboard, disposeDashboard, setMessageHandler, hasDashboard, postMessageToWebview } from './webview/webviewProvider';
 
 let statusBarItem: vscode.StatusBarItem;
 let dataService: DataService;
@@ -11,7 +11,7 @@ let refreshTimer: ReturnType<typeof setInterval> | undefined;
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  dataService = new DataService(context.globalState);
+  dataService = new DataService(context.globalState, context.secrets);
   statusBarItem = createStatusBarItem();
 
   // Initial fetch from API (silent, no prompt)
@@ -31,9 +31,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const refreshCmd = vscode.commands.registerCommand(
     'copilot-premium-tracker.refresh',
     async () => {
-      dataService.clearCache();
+      dataService.forceRefresh();
       await refreshFromApi(true);
-      refreshDashboard(context);
+      if (hasDashboard()) {
+        refreshDashboard(context);
+      }
     },
   );
 
@@ -63,9 +65,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   );
 
+  const setBillingTokenCmd = vscode.commands.registerCommand(
+    'copilot-premium-tracker.setBillingToken',
+    async () => {
+      const token = await vscode.window.showInputBox({
+        prompt: 'Enter a fine-grained PAT with the "Plan" account permission (read)',
+        placeHolder: 'github_pat_...',
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (token) {
+        await dataService.setBillingToken(token);
+        vscode.window.showInformationMessage('Copilot Tracker: Billing token saved. Refreshing...');
+        dataService.forceRefresh();
+        await refreshFromApi(true);
+        if (hasDashboard()) { refreshDashboard(context); }
+      }
+    },
+  );
+
+  const clearBillingTokenCmd = vscode.commands.registerCommand(
+    'copilot-premium-tracker.clearBillingToken',
+    async () => {
+      await dataService.clearBillingToken();
+      vscode.window.showInformationMessage('Copilot Tracker: Billing token cleared.');
+    },
+  );
+
   context.subscriptions.push(
     statusBarItem, showCmd, refreshCmd, addModelCmd, setLimitCmd, resetCmd,
+    setBillingTokenCmd, clearBillingTokenCmd,
     { dispose: () => { disposeDashboard(); if (refreshTimer) { clearInterval(refreshTimer); } } },
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('copilot-premium-tracker.statusBarMode')) {
+        refreshUI();
+      }
+    }),
   );
 }
 
@@ -93,7 +128,7 @@ async function handleWebviewMessage(
 ): Promise<void> {
   switch (msg.type) {
     case 'refresh': {
-      dataService.clearCache();
+      dataService.forceRefresh();
       await refreshFromApi(true);
       refreshDashboard(context);
       break;
@@ -142,6 +177,20 @@ async function handleWebviewMessage(
         await dataService.addModel(model);
         refreshUI();
         refreshDashboard(context);
+      }
+      break;
+    }
+    case 'fetchBillingRange': {
+      const startDate = msg.startDate as string;
+      const endDate = msg.endDate as string;
+      if (startDate && endDate) {
+        try {
+          const items = await dataService.fetchBillingRange(startDate, endDate);
+          postMessageToWebview({ type: 'billingRangeResult', items });
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          postMessageToWebview({ type: 'billingRangeResult', items: [], error: errMsg });
+        }
       }
       break;
     }

@@ -1,5 +1,6 @@
 ﻿import * as vscode from 'vscode';
 import { UsageData } from '../dataService';
+import { BillingUsageItem } from '../api';
 import { calculatePacing, classifyStatus, getPacingProgress, getRecommendedPercentage } from '../pacing';
 
 export function getWebviewHtml(
@@ -7,7 +8,7 @@ export function getWebviewHtml(
   webview: vscode.Webview,
   nonce: string
 ): string {
-  const { totalUsage, limit, remaining, billedTotal, models, dateRange, dataSource, lastFetchedAt } = data;
+  const { totalUsage, limit, remaining, billedTotal, models, dateRange, dataSource, lastFetchedAt, billingItems } = data;
   const pacing = calculatePacing(totalUsage, limit, new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000), remaining);
   const status = classifyStatus(pacing);
   const legacyPacing = getPacingProgress(totalUsage, limit);
@@ -15,42 +16,6 @@ export function getWebviewHtml(
   const recommendedPct = getRecommendedPercentage();
   const target = (recommendedPct * limit * 100) / 100;
   const usagePercent = limit > 0 ? Math.min((totalUsage / limit) * 100, 100) : 0;
-
-  const totalIncludedSum = models.reduce((s, m) => s + m.includedRequests, 0);
-
-  const tableRows = models
-    .map(
-      (m) => {
-        const pctOfTotal = totalIncludedSum > 0
-          ? ((m.includedRequests / totalIncludedSum) * 100).toFixed(1)
-          : '0.0';
-        return `
-      <tr>
-        <td class="model-name">${escapeHtml(m.model)}</td>
-        <td class="num">${formatNumber(m.includedRequests)}</td>
-        <td class="num">${pctOfTotal}%</td>
-        <td class="num">${formatNumber(m.billedRequests)}</td>
-        <td class="num">${formatCurrency(m.grossAmount)}</td>
-        <td class="num">${formatCurrency(m.billedAmount)}</td>
-        <td class="actions">
-          <button class="icon-btn edit-btn" title="Edit" data-model="${escapeAttr(m.model)}" data-included="${m.includedRequests}" data-billed="${m.billedRequests}" data-gross="${m.grossAmount}" data-billedamt="${m.billedAmount}">✏️</button>
-          <button class="icon-btn remove-btn" title="Remove" data-model="${escapeAttr(m.model)}">✕</button>
-        </td>
-      </tr>`;
-      }
-    )
-    .join('');
-
-  const totalIncluded = totalIncludedSum;
-  const totalBilled = models.reduce((s, m) => s + m.billedRequests, 0);
-  const totalGross = models.reduce((s, m) => s + m.grossAmount, 0);
-  const totalBilledAmt = models.reduce((s, m) => s + m.billedAmount, 0);
-
-  const emptyState = models.length === 0
-    ? `<div class="empty-state">
-        <p>No manual model entries. Usage data is ${dataSource === 'api' ? 'fetched automatically from GitHub API' : 'not yet available - click Refresh to fetch from API'}.</p>
-       </div>`
-    : '';
 
   // Enhanced pacing metrics
   const allowance = pacing.dailyAllowance;
@@ -667,37 +632,6 @@ export function getWebviewHtml(
       max-height: 2000px;
     }
 
-    /* Visual hint for manual billing source */
-    .manual-hint {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.6875rem;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .manual-link {
-      color: var(--vscode-textLink-foreground);
-      cursor: pointer;
-      text-decoration: underline;
-      font-weight: 600;
-    }
-
-    .manual-link.pulse {
-      animation: pulse 1s ease;
-    }
-
-    .collapsible-content.highlight {
-      box-shadow: 0 0 0.5rem rgba(88,166,255,0.15);
-      border-radius: 0.25rem;
-    }
-
-    @keyframes pulse {
-      0% { transform: scale(1); }
-      50% { transform: scale(1.03); }
-      100% { transform: scale(1); }
-    }
-
     @media (max-width: 37.5rem) {
       body {
         padding: 1rem;
@@ -708,6 +642,91 @@ export function getWebviewHtml(
       .card {
         min-width: unset;
       }
+    }
+
+    /* Billing Summary Section */
+    .billing-summary {
+      background-color: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+      border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
+      border-radius: 0.5rem;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .billing-summary h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--vscode-foreground);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .billing-summary table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .billing-summary thead th {
+      text-align: left;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: var(--vscode-descriptionForeground);
+      text-transform: uppercase;
+      letter-spacing: 0.03125rem;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 0.125rem solid var(--vscode-panel-border, var(--vscode-widget-border));
+    }
+
+    .billing-summary thead th.num {
+      text-align: right;
+    }
+
+    .billing-summary tbody td {
+      padding: 0.625rem 0.75rem;
+      font-size: 0.8125rem;
+      border-bottom: 0.0625rem solid var(--vscode-panel-border, var(--vscode-widget-border, rgba(128,128,128,0.2)));
+    }
+
+    .billing-summary tbody td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: var(--vscode-foreground);
+    }
+
+    .billing-summary tbody td.sku-name {
+      font-weight: 500;
+      color: var(--vscode-foreground);
+    }
+
+    .billing-summary tfoot td {
+      padding: 0.625rem 0.75rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      border-top: 0.125rem solid var(--vscode-panel-border, var(--vscode-widget-border));
+      color: var(--vscode-foreground);
+    }
+
+    .billing-summary tfoot td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .billing-summary .empty-state {
+      text-align: center;
+      padding: 1.5rem 1rem;
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.8125rem;
+    }
+
+    .billing-summary .empty-state a {
+      color: var(--vscode-textLink-foreground);
+      text-decoration: none;
+    }
+
+    .billing-summary .empty-state a:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
@@ -791,111 +810,17 @@ export function getWebviewHtml(
     </div>
   </div>
 
-  <div class="table-section">
-    <div class="table-header">
-      <h2 class="collapsible-toggle" id="tableToggle">
-        <span class="arrow" id="tableArrow">&#9656;</span> Manual usage breakdown
-      </h2>
-      <div class="manual-hint">
-        <span>Manual entries should match premium requests usage</span>
-        <a id="billingLink" class="manual-link" title="Open GitHub billing page">Open billing</a>
-      </div>
-      <span class="date-range">${escapeHtml(dateRange)}</span>
-    </div>
-    <div class="collapsible-content" id="tableContent">
-      ${emptyState}
-      <table${models.length === 0 ? ' style="display:none"' : ''}>
-        <thead>
-          <tr>
-            <th>Model</th>
-            <th class="num">Included requests</th>
-            <th class="num">% of Total</th>
-            <th class="num">Billed requests</th>
-            <th class="num">Gross amount</th>
-            <th class="num">Billed amount</th>
-            <th style="width: 4.375rem;"></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRows}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td>Total</td>
-            <td class="num">${formatNumber(totalIncluded)}</td>
-            <td class="num">100.0%</td>
-            <td class="num">${formatNumber(totalBilled)}</td>
-            <td class="num">${formatCurrency(totalGross)}</td>
-            <td class="num">${formatCurrency(totalBilledAmt)}</td>
-            <td></td>
-          </tr>
-        </tfoot>
-      </table>
-
-      <div class="add-form">
-        <h3 id="formTitle">Add model usage</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label for="modelName">Model</label>
-            <input type="text" id="modelName" placeholder="e.g. Claude Sonnet 4" />
-          </div>
-          <div class="form-group">
-            <label for="includedReq">Included requests</label>
-            <input type="number" id="includedReq" value="0" min="0" step="0.01" />
-          </div>
-          <div class="form-group">
-            <label for="billedReq">Billed requests</label>
-            <input type="number" id="billedReq" value="0" min="0" step="0.01" />
-          </div>
-          <div class="form-group">
-            <label for="grossAmt">Gross amount</label>
-            <div class="currency-wrapper">
-              <span class="currency-prefix">$</span>
-              <input type="text" id="grossAmt" value="0.00" readonly tabindex="-1" title="Auto-calculated: $0.04 per request" />
-            </div>
-          </div>
-          <div class="form-group">
-            <label for="billedAmt">Billed amount</label>
-            <div class="currency-wrapper">
-              <span class="currency-prefix">$</span>
-              <input type="text" id="billedAmt" value="0.00" />
-            </div>
-          </div>
-          <div class="form-buttons">
-            <button class="btn btn-primary" id="submitBtn">Add</button>
-            <button class="btn btn-secondary" id="cancelBtn" style="display:none;">Cancel</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  ${buildBillingSummarySection(billingItems)}
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
     // Refresh button
-    document.getElementById('refreshBtn').addEventListener('click', () => {
+    const refreshBtn = document.getElementById('refreshBtn');
+    refreshBtn.addEventListener('click', () => {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Refreshing...';
       vscode.postMessage({ type: 'refresh' });
-    });
-
-    // Collapsible table section
-    const tableToggle = document.getElementById('tableToggle');
-    const tableArrow = document.getElementById('tableArrow');
-    const tableContent = document.getElementById('tableContent');
-
-    // restore persisted open state (keeps the collapsible open across refreshes)
-    const __state = vscode.getState() || {};
-    if (__state.tableOpen) {
-      tableContent.classList.add('open');
-      tableArrow.classList.add('open');
-    }
-
-    tableToggle.addEventListener('click', () => {
-      tableContent.classList.toggle('open');
-      tableArrow.classList.toggle('open');
-      const s = vscode.getState() || {};
-      s.tableOpen = tableContent.classList.contains('open');
-      vscode.setState(s);
     });
 
     // Limit editing
@@ -911,132 +836,85 @@ export function getWebviewHtml(
       }
     });
 
-    // Remove buttons
-    document.querySelectorAll('.remove-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const name = btn.getAttribute('data-model');
-        vscode.postMessage({ type: 'removeModel', modelName: name });
-      });
+    // Billing date range fetch
+    const fetchBillingBtn = document.getElementById('fetchBillingBtn');
+    const billingStartInput = document.getElementById('billingStart');
+    const billingEndInput = document.getElementById('billingEnd');
+    const billingTableBody = document.getElementById('billingTableBody');
+    const billingTotalRow = document.getElementById('billingTotalRow');
+    const billingTable = document.getElementById('billingTable');
+    const billingLoading = document.getElementById('billingLoading');
+    const billingError = document.getElementById('billingError');
+
+    fetchBillingBtn.addEventListener('click', () => {
+      const start = billingStartInput.value;
+      const end = billingEndInput.value;
+      if (!start || !end) return;
+      fetchBillingBtn.disabled = true;
+      fetchBillingBtn.textContent = 'Fetching...';
+      billingLoading.style.display = '';
+      billingError.style.display = 'none';
+      billingTable.style.display = 'none';
+      vscode.postMessage({ type: 'fetchBillingRange', startDate: start, endDate: end });
     });
 
-    // Edit buttons
-    let editingModel = null;
-    const formTitle = document.getElementById('formTitle');
-    const submitBtn = document.getElementById('submitBtn');
-    const cancelBtn = document.getElementById('cancelBtn');
-    const modelNameInput = document.getElementById('modelName');
-    const includedInput = document.getElementById('includedReq');
-    const billedInput = document.getElementById('billedReq');
-    const grossInput = document.getElementById('grossAmt');
-    const billedAmtInput = document.getElementById('billedAmt');
-    const COST_PER_REQUEST = 0.04;
-
-    function calcGross() {
-      const inc = Number(includedInput.value) || 0;
-      const bil = Number(billedInput.value) || 0;
-      grossInput.value = ((inc + bil) * COST_PER_REQUEST).toFixed(2);
-    }
-
-    function formatCurrencyInput(el) {
-      const val = parseFloat(el.value.replace(/[^0-9.\\-]/g, ''));
-      el.value = isNaN(val) ? '0.00' : val.toFixed(2);
-    }
-
-    includedInput.addEventListener('input', calcGross);
-    billedInput.addEventListener('input', calcGross);
-    billedAmtInput.addEventListener('blur', () => formatCurrencyInput(billedAmtInput));
-
-    document.querySelectorAll('.edit-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        // Open the collapsible if closed
-        if (!tableContent.classList.contains('open')) {
-          tableContent.classList.add('open');
-          tableArrow.classList.add('open');
+    // Listen for messages from extension
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (msg.type === 'billingRangeResult') {
+        fetchBillingBtn.disabled = false;
+        fetchBillingBtn.textContent = 'Fetch';
+        billingLoading.style.display = 'none';
+        const items = msg.items || [];
+        if (msg.error) {
+          billingError.textContent = msg.error;
+          billingError.style.display = '';
+          return;
         }
-        // persist open state so UI remains open after extension refresh
-        const _s = vscode.getState() || {};
-        _s.tableOpen = true;
-        vscode.setState(_s);
-        editingModel = btn.getAttribute('data-model');
-        modelNameInput.value = editingModel;
-        modelNameInput.readOnly = true;
-        includedInput.value = btn.getAttribute('data-included');
-        billedInput.value = btn.getAttribute('data-billed');
-        calcGross();
-        billedAmtInput.value = parseFloat(btn.getAttribute('data-billedamt') || '0').toFixed(2);
-        formTitle.textContent = 'Edit model usage';
-        submitBtn.textContent = 'Save';
-        cancelBtn.style.display = '';
-        modelNameInput.focus();
-      });
-    });
-
-    cancelBtn.addEventListener('click', () => {
-      resetForm();
-    });
-
-    // Billing link: open GitHub billing page and show visual cue
-    const billingLinkEl = document.getElementById('billingLink');
-    if (billingLinkEl) {
-      billingLinkEl.addEventListener('click', (e) => {
-        e.preventDefault();
-        const url = 'https://github.com/settings/billing/premium_requests_usage';
-        vscode.postMessage({ type: 'openExternal', url });
-        billingLinkEl.classList.add('pulse');
-        tableContent.classList.add('highlight');
-        setTimeout(() => billingLinkEl.classList.remove('pulse'), 1100);
-        setTimeout(() => tableContent.classList.remove('highlight'), 1200);
-      });
-    }
-
-    function resetForm() {
-      editingModel = null;
-      modelNameInput.value = '';
-      modelNameInput.readOnly = false;
-      includedInput.value = '0';
-      billedInput.value = '0';
-      grossInput.value = '0.00';
-      billedAmtInput.value = '0.00';
-      formTitle.textContent = 'Add model usage';
-      submitBtn.textContent = 'Add';
-      cancelBtn.style.display = 'none';
-    }
-
-    // Add / Edit submit
-    submitBtn.addEventListener('click', () => {
-      const name = modelNameInput.value.trim();
-      if (!name) {
-        modelNameInput.focus();
-        return;
-      }
-      const model = {
-        model: name,
-        includedRequests: Number(includedInput.value) || 0,
-        billedRequests: Number(billedInput.value) || 0,
-        grossAmount: parseFloat(grossInput.value) || 0,
-        billedAmount: parseFloat(billedAmtInput.value.replace(/[^0-9.\\-]/g, '')) || 0,
-      };
-      // persist that the table should stay open across rerenders
-      const _s2 = vscode.getState() || {};
-      _s2.tableOpen = true;
-      vscode.setState(_s2);
-
-      if (editingModel) {
-        vscode.postMessage({ type: 'editModel', model });
-      } else {
-        vscode.postMessage({ type: 'addModel', model });
-      }
-      resetForm();
-    });
-
-    // Submit on Enter in any field
-    document.querySelectorAll('.add-form input').forEach(input => {
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          submitBtn.click();
+        if (items.length === 0) {
+          billingError.textContent = 'No billing data found for the selected date range.';
+          billingError.style.display = '';
+          return;
         }
-      });
+        billingTableBody.innerHTML = '';
+        let totGrossQty = 0, totGrossAmt = 0, totDiscQty = 0, totDiscAmt = 0, totNetQty = 0, totNetAmt = 0;
+        items.forEach(item => {
+          totGrossQty += item.grossQuantity || 0;
+          totGrossAmt += item.grossAmount || 0;
+          totDiscQty += item.discountQuantity || 0;
+          totDiscAmt += item.discountAmount || 0;
+          totNetQty += item.netQuantity || 0;
+          totNetAmt += item.netAmount || 0;
+          const tr = document.createElement('tr');
+          tr.innerHTML =
+            '<td class="sku-name">' + escapeH(item.model || item.sku) + '</td>' +
+            '<td class="num">' + fmtNum(item.grossQuantity) + '</td>' +
+            '<td class="num">' + fmtCur(item.grossAmount) + '</td>' +
+            '<td class="num">' + fmtNum(item.discountQuantity) + '</td>' +
+            '<td class="num">' + fmtCur(item.discountAmount) + '</td>' +
+            '<td class="num">' + fmtNum(item.netQuantity) + '</td>' +
+            '<td class="num">' + fmtCur(item.netAmount) + '</td>';
+          billingTableBody.appendChild(tr);
+        });
+        billingTotalRow.innerHTML =
+          '<td>Total</td>' +
+          '<td class="num">' + fmtNum(totGrossQty) + '</td>' +
+          '<td class="num">' + fmtCur(totGrossAmt) + '</td>' +
+          '<td class="num">' + fmtNum(totDiscQty) + '</td>' +
+          '<td class="num">' + fmtCur(totDiscAmt) + '</td>' +
+          '<td class="num">' + fmtNum(totNetQty) + '</td>' +
+          '<td class="num">' + fmtCur(totNetAmt) + '</td>';
+        billingTable.style.display = '';
+      }
     });
+
+    function escapeH(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+    function fmtNum(n) { return n % 1 === 0 ? n.toFixed(0) : n.toFixed(2); }
+    function fmtCur(n) { return '$' + n.toFixed(2); }
   </script>
 </body>
 </html>`;
@@ -1070,4 +948,92 @@ function getProgressClass(pacing: number): string {
   if (pacing > 1.0) { return 'danger'; }
   if (pacing > 0.8) { return 'warning'; }
   return 'ok';
+}
+
+function humanizeSku(sku: string): string {
+  return sku
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function buildBillingSummarySection(items: BillingUsageItem[]): string {
+  // Default date range: 1st of current month to today
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const defaultStart = `${y}-${m}-01`;
+  const defaultEnd = `${y}-${m}-${d}`;
+
+  // Build static billing summary rows from the old endpoint data (if available)
+  let staticRows = '';
+  if (items && items.length > 0) {
+    staticRows = items.map((item) => {
+      const cost = (item.grossQuantity ?? 0) * (item.pricePerUnit ?? 0);
+      return `
+        <tr>
+          <td class="sku-name">${escapeHtml(humanizeSku(item.sku))}</td>
+          <td class="num">${formatNumber(item.grossQuantity)}</td>
+          <td class="num">${formatCurrency(cost)}</td>
+          <td class="num">${item.netQuantity !== undefined ? formatNumber(item.netQuantity) : '\u2014'}</td>
+          <td class="num">\u2014</td>
+          <td class="num">\u2014</td>
+          <td class="num">\u2014</td>
+        </tr>`;
+    }).join('');
+  }
+
+  return `
+  <div class="billing-summary">
+    <h2>Billing summary <span class="source-badge api" style="font-size:0.625rem;">API</span></h2>
+    <div class="form-row" style="margin-bottom: 1rem; align-items: flex-end;">
+      <div class="form-group">
+        <label for="billingStart">Start date</label>
+        <input type="date" id="billingStart" value="${defaultStart}" />
+      </div>
+      <div class="form-group">
+        <label for="billingEnd">End date</label>
+        <input type="date" id="billingEnd" value="${defaultEnd}" />
+      </div>
+      <div class="form-buttons">
+        <button class="btn btn-primary" id="fetchBillingBtn">Fetch</button>
+      </div>
+    </div>
+    <div id="billingLoading" style="display:none; padding: 1rem; text-align: center; color: var(--vscode-descriptionForeground);">Fetching billing data...</div>
+    <div id="billingError" style="display:none; padding: 0.75rem; text-align: center; color: var(--vscode-terminal-ansiRed, #f85149); font-size: 0.8125rem;"></div>
+    <table id="billingTable"${items && items.length > 0 ? '' : ' style="display:none"'}>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th class="num">Gross qty</th>
+          <th class="num">Gross amount</th>
+          <th class="num">Discount qty</th>
+          <th class="num">Discount amount</th>
+          <th class="num">Net qty</th>
+          <th class="num">Net amount</th>
+        </tr>
+      </thead>
+      <tbody id="billingTableBody">
+        ${staticRows}
+      </tbody>
+      <tfoot>
+        <tr id="billingTotalRow">
+          ${items && items.length > 0 ? `
+            <td>Total</td>
+            <td class="num">${formatNumber(items.reduce((s, i) => s + (i.grossQuantity ?? 0), 0))}</td>
+            <td class="num">${formatCurrency(items.reduce((s, i) => s + (i.grossQuantity ?? 0) * (i.pricePerUnit ?? 0), 0))}</td>
+            <td class="num">\u2014</td>
+            <td class="num">\u2014</td>
+            <td class="num">${formatNumber(items.reduce((s, i) => s + (i.netQuantity ?? 0), 0))}</td>
+            <td class="num">\u2014</td>
+          ` : '<td colspan="7"></td>'}
+        </tr>
+      </tfoot>
+    </table>
+    ${!items || items.length === 0 ? `
+    <div class="empty-state" id="billingEmptyState">
+      <p>Select a date range and click "Fetch" to load billing data from the GitHub API.</p>
+      <p><a href="#" onclick="document.getElementById('fetchBillingBtn').click(); return false;">Or click here to load current month &rarr;</a></p>
+    </div>` : ''}
+  </div>`;
 }

@@ -41,6 +41,26 @@ export interface BillingUsageItem {
   pricePerUnit?: number;
 }
 
+export interface DailyBillingUsageItem {
+  product: string;
+  sku: string;
+  model: string;
+  unitType: string;
+  pricePerUnit: number;
+  grossQuantity: number;
+  grossAmount: number;
+  discountQuantity: number;
+  discountAmount: number;
+  netQuantity: number;
+  netAmount: number;
+}
+
+export interface DailyBillingResponse {
+  timePeriod: { year: number; month: number; day: number };
+  user: string;
+  usageItems: DailyBillingUsageItem[];
+}
+
 const axiosInstance = axios.create({
   baseURL: GITHUB_API_BASE,
   validateStatus: () => true,
@@ -50,7 +70,7 @@ function buildHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
     Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
+    'X-GitHub-Api-Version': '2026-03-10',
   };
 }
 
@@ -229,4 +249,30 @@ export async function resolveToken(
   }
 
   return undefined;
+}
+
+/**
+ * Fetches daily billing usage from the premium_request/usage endpoint.
+ * Endpoint: GET /users/{username}/settings/billing/premium_request/usage?year=YYYY&month=M&day=D
+ */
+export async function fetchDailyBillingUsage(
+  token: string,
+  username: string,
+  year: number,
+  month: number,
+  day: number,
+): Promise<DailyBillingResponse> {
+  const url = `/users/${encodeURIComponent(username)}/settings/billing/premium_request/usage`;
+  const response = await axiosInstance.get(url, {
+    headers: buildHeaders(token),
+    params: { year, month, day },
+  });
+  throwOnHttpError(response, url);
+
+  const data = response.data as DailyBillingResponse;
+  return {
+    timePeriod: data.timePeriod ?? { year, month, day },
+    user: data.user ?? username,
+    usageItems: data.usageItems ?? [],
+  };
 }
