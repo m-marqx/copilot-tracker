@@ -15,6 +15,9 @@ export interface PacingResult {
   timeOfDayProgress: number;
   overageRequests: number;
   overageCost: number;
+  startOfTodayQuota: number;
+  endOfTodayQuota: number;
+  remainingToday: number;
 }
 
 export type UsageStatus = 'on-track' | 'over-budget' | 'ahead' | 'exhausted';
@@ -67,6 +70,10 @@ export function calculatePacing(
   const overageRequests = Math.max(0, usedRequests - monthlyLimit);
   const overageCost = overageRequests * COST_PER_PREMIUM_REQUEST;
 
+  const startOfTodayQuota = (dayOfMonth - 1) * baseDailyBudget;
+  const endOfTodayQuota = dayOfMonth * baseDailyBudget;
+  const remainingToday = Math.max(0, endOfTodayQuota - usedRequests);
+
   return {
     usedRequests,
     monthlyLimit,
@@ -84,6 +91,9 @@ export function calculatePacing(
     timeOfDayProgress,
     overageRequests,
     overageCost,
+    startOfTodayQuota,
+    endOfTodayQuota,
+    remainingToday,
   };
 }
 
@@ -128,4 +138,41 @@ export function getDailyPacingProgress(usage: number, limit: number, date: Date 
   if (usage < baseline) { return 0; }
   const dayProgress = (usage - baseline) / dailyAllowance;
   return Math.min(dayProgress, 1);
+}
+
+/**
+ * Generates a ░█ pacer bar with a │ today-position marker.
+ *
+ * Layout: `████│░░░░░░░` — █ = used portion, ░ = remaining, │ = today marker
+ *
+ * - When usage is below today's marker: gap of ░ between █ and │
+ * - When usage is past today's marker: █ extends beyond │
+ * - When over monthly limit: all █ past the marker, with overage cost shown separately
+ */
+export function generatePacerBar(pacing: PacingResult, width: number = 12): string {
+  const { usedRequests, monthlyLimit, dayOfMonth, daysInMonth } = pacing;
+
+  const usedRatio = Math.min(usedRequests / Math.max(1, monthlyLimit), 1);
+  const todayRatio = dayOfMonth / daysInMonth;
+
+  const usedChars = Math.round(usedRatio * width);
+  const todayPos = Math.min(width, Math.round(todayRatio * width));
+
+  let bar = '';
+  for (let i = 0; i < width; i++) {
+    if (i === todayPos) {
+      bar += '│';
+    }
+    if (i < usedChars) {
+      bar += '█';
+    } else {
+      bar += '░';
+    }
+  }
+  // If todayPos is at the end, append the marker
+  if (todayPos === width) {
+    bar += '│';
+  }
+
+  return bar;
 }
