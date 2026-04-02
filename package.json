@@ -26,6 +26,21 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Copilot Premium Tracker",
+      "properties": {
+        "copilot-premium-tracker.statusBarMode": {
+          "type": "string",
+          "enum": ["pacer", "classic"],
+          "default": "pacer",
+          "enumDescriptions": [
+            "Pacer bar with today marker and remaining-today count",
+            "Classic progress bar with actual% / target%"
+          ],
+          "description": "Status bar display mode."
+        }
+      }
+    },
     "commands": [
       {
         "command": "copilot-premium-tracker.showDashboard",
@@ -51,6 +66,16 @@
         "command": "copilot-premium-tracker.resetData",
         "title": "Reset All Usage Data",
         "category": "Copilot Tracker"
+      },
+      {
+        "command": "copilot-premium-tracker.setBillingToken",
+        "title": "Set Billing Token (Fine-Grained PAT with Plan Permission)",
+        "category": "Copilot Tracker"
+      },
+      {
+        "command": "copilot-premium-tracker.clearBillingToken",
+        "title": "Clear Billing Token",
+        "category": "Copilot Tracker"
       }
     ]
   },
@@ -66,6 +91,6 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
-    "axios": "^1.14.0"
+    "axios": "1.14.0"
   }
 }
