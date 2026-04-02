@@ -47,6 +47,16 @@ export function showDashboard(
   });
 }
 
+export function hasDashboard(): boolean {
+  return currentPanel !== undefined;
+}
+
+export function postMessageToWebview(message: unknown): void {
+  if (currentPanel) {
+    currentPanel.webview.postMessage(message);
+  }
+}
+
 export function disposeDashboard(): void {
   if (currentPanel) {
     currentPanel.dispose();
