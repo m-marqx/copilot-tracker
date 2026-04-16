@@ -13,10 +13,16 @@ export function createStatusBarItem(): vscode.StatusBarItem {
   return item;
 }
 
-function getStatusBarMode(): 'pacer' | 'classic' {
+let cachedMode: 'pacer' | 'classic' = 'pacer';
+
+export function initStatusBarMode(): void {
   const config = vscode.workspace.getConfiguration('copilot-premium-tracker');
   const mode = config.get<string>('statusBarMode', 'pacer');
-  return mode === 'classic' ? 'classic' : 'pacer';
+  cachedMode = mode === 'classic' ? 'classic' : 'pacer';
+}
+
+function getStatusBarMode(): 'pacer' | 'classic' {
+  return cachedMode;
 }
 
 export function updateStatusBar(item: vscode.StatusBarItem, data: UsageData): void {
