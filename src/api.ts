@@ -26,6 +26,10 @@ export class NotFoundError extends Error {
   }
 }
 
+export function isBillingPermissionError(error: unknown): boolean {
+  return error instanceof NotFoundError && error.message.includes('/settings/billing/');
+}
+
 export interface CopilotQuota {
   used: number;
   remaining: number;
@@ -36,9 +40,6 @@ export interface CopilotQuota {
 export interface BillingUsageItem {
   sku: string;
   grossQuantity: number;
-  netQuantity?: number;
-  unitType?: string;
-  pricePerUnit?: number;
 }
 
 export interface DailyBillingUsageItem {
@@ -57,6 +58,7 @@ export interface DailyBillingUsageItem {
 
 const axiosInstance = axios.create({
   baseURL: GITHUB_API_BASE,
+  timeout: 15_000,
   validateStatus: () => true,
 });
 
@@ -77,22 +79,20 @@ function throwOnHttpError(response: AxiosResponse, url: string): void {
     const retryHeader = response.headers['retry-after'] as string | undefined;
     const retryAfter = retryHeader ? parseInt(retryHeader, 10) : 60;
     throw new RateLimitError(
-      'GitHub API rate limit exceeded (429)',
+      `GitHub API rate limit exceeded (429): ${url}`,
       isNaN(retryAfter) ? 60 : retryAfter,
     );
   }
   throw new Error(`GitHub API ${status}: ${url}`);
 }
 
-function handleRateLimit(response: AxiosResponse, url: string): void {
-  if (response.status === 429) {
-    const retryHeader = response.headers['retry-after'] as string | undefined;
-    const retryAfter = retryHeader ? parseInt(retryHeader, 10) : 60;
-    throw new RateLimitError(
-      `Rate limited on ${url}`,
-      isNaN(retryAfter) ? 60 : retryAfter,
-    );
-  }
+/**
+ * Like throwOnHttpError but treats 404 as a non-error (returns silently)
+ * because internal endpoints may not exist for every plan type.
+ */
+function throwOnInternalEndpointError(response: AxiosResponse, url: string): void {
+  if (response.status === 404) { return; }
+  throwOnHttpError(response, url);
 }
 
 /**
@@ -115,8 +115,7 @@ export async function fetchCopilotInternalQuota(
     },
   });
 
-  handleRateLimit(response, url);
-  if (response.status < 200 || response.status >= 300) { return null; }
+  throwOnInternalEndpointError(response, url);
 
   const data = response.data as Record<string, unknown>;
   const lq = data?.limited_user_quotas as Record<string, unknown> | undefined;
@@ -150,8 +149,7 @@ export async function fetchCopilotBusinessQuota(
     },
   });
 
-  handleRateLimit(response, url);
-  if (response.status < 200 || response.status >= 300) { return null; }
+  throwOnInternalEndpointError(response, url);
 
   const data = response.data as {
     quota_reset_date?: string;
@@ -196,18 +194,17 @@ export async function fetchUsername(token: string): Promise<string> {
 export async function fetchBillingUsage(
   token: string,
   username: string,
-): Promise<{ usedRequests: number; items: BillingUsageItem[] }> {
+): Promise<{ usedRequests: number }> {
   const url = `/users/${encodeURIComponent(username)}/settings/billing/usage/summary`;
   const response = await axiosInstance.get(url, { headers: buildHeaders(token) });
   throwOnHttpError(response, url);
 
   const data = response.data as { usageItems?: BillingUsageItem[] };
-  const copilotItems = (data.usageItems ?? []).filter(
-    (item) => item.sku === 'copilot_premium_request',
-  );
-  const usedRequests = copilotItems.reduce((sum, item) => sum + item.grossQuantity, 0);
+  const usedRequests = (data.usageItems ?? [])
+    .filter((item) => item.sku === 'copilot_premium_request')
+    .reduce((sum, item) => sum + item.grossQuantity, 0);
 
-  return { usedRequests, items: copilotItems };
+  return { usedRequests };
 }
 
 /**
