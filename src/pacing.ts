@@ -24,8 +24,8 @@ export type UsageStatus = 'on-track' | 'over-budget' | 'ahead' | 'exhausted';
 
 export const COST_PER_PREMIUM_REQUEST = 0.04;
 
-export function getDaysInMonth(date: Date = new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000)): number {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+export function getDaysInMonth(date: Date = new Date()): number {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
 }
 
 /**
@@ -34,15 +34,18 @@ export function getDaysInMonth(date: Date = new Date(new Date().getTime() + new 
  * Calculates daily-budget metrics: daily allowance, multiplier,
  * banked/overspent requests, projected end-of-month, and time-of-day
  * adjusted averages.
+ *
+ * All date operations use UTC methods to ensure consistent pacing
+ * regardless of the user's local timezone.
  */
 export function calculatePacing(
   usedRequests: number,
   monthlyLimit: number,
-  now: Date = new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000),
+  now: Date = new Date(),
   remainingTotal?: number,
 ): PacingResult {
   const daysInMonth = getDaysInMonth(now);
-  const dayOfMonth = now.getDate();
+  const dayOfMonth = now.getUTCDate();
   const daysRemaining = Math.max(1, daysInMonth - dayOfMonth + 1);
 
   const baseDailyBudget = monthlyLimit / daysInMonth;
@@ -51,8 +54,8 @@ export function calculatePacing(
     : Math.max(0, monthlyLimit - usedRequests);
   const dailyAllowance = Math.max(0, remaining) / daysRemaining;
 
-  // Time-of-day progress (0.0 at midnight, ~1.0 at end of day)
-  const timeOfDayProgress = (now.getHours() * 60 + now.getMinutes()) / (24 * 60);
+  // Time-of-day progress (0.0 at midnight UTC, ~1.0 at end of day)
+  const timeOfDayProgress = (now.getUTCHours() * 60 + now.getUTCMinutes()) / (24 * 60);
 
   // Average daily usage (smoothly includes partial current day)
   const effectiveDaysElapsed = Math.max(0.1, dayOfMonth - 1 + timeOfDayProgress);
@@ -106,40 +109,6 @@ export function classifyStatus(result: PacingResult): UsageStatus {
   return 'on-track';
 }
 
-// Legacy helpers (kept for backward compat)
-
-export function getRecommendedPercentage(date: Date = new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000)): number {
-  const currentDay = date.getDate();
-  const totalDays = getDaysInMonth(date);
-  return currentDay / totalDays;
-}
-
-export function getPacingProgress(usage: number, limit: number, date: Date = new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000)): number {
-  const recommended = getRecommendedPercentage(date);
-  const target = recommended * limit;
-  if (target === 0) { return 0; }
-  return usage / target;
-}
-
-export function getDailyAllowance(limit: number, date: Date = new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000)): number {
-  return limit / getDaysInMonth(date);
-}
-
-export function getStartOfDayBaseline(limit: number, date: Date = new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000)): number {
-  const dailyAllowance = getDailyAllowance(limit, date);
-  const currentDay = date.getDate();
-  return dailyAllowance * (currentDay - 1);
-}
-
-export function getDailyPacingProgress(usage: number, limit: number, date: Date = new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000)): number {
-  const dailyAllowance = getDailyAllowance(limit, date);
-  const baseline = getStartOfDayBaseline(limit, date);
-  if (dailyAllowance === 0) { return 0; }
-  if (usage < baseline) { return 0; }
-  const dayProgress = (usage - baseline) / dailyAllowance;
-  return Math.min(dayProgress, 1);
-}
-
 /**
  * Generates a ░█ pacer bar with a │ today-position marker.
  *
@@ -156,22 +125,17 @@ export function generatePacerBar(pacing: PacingResult, width: number = 12): stri
   const todayRatio = dayOfMonth / daysInMonth;
 
   const usedChars = Math.round(usedRatio * width);
-  const todayPos = Math.min(width, Math.round(todayRatio * width));
+  const todayPos = Math.min(width - 1, Math.round(todayRatio * (width - 1)));
 
   let bar = '';
   for (let i = 0; i < width; i++) {
     if (i === todayPos) {
       bar += '│';
-    }
-    if (i < usedChars) {
+    } else if (i < usedChars) {
       bar += '█';
     } else {
       bar += '░';
     }
-  }
-  // If todayPos is at the end, append the marker
-  if (todayPos === width) {
-    bar += '│';
   }
 
   return bar;
