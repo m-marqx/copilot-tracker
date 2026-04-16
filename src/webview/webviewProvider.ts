@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import { UsageData } from '../dataService';
 import { getWebviewHtml } from './webviewContent';
 
@@ -17,7 +18,7 @@ export function showDashboard(
 ): void {
   if (currentPanel) {
     currentPanel.reveal(vscode.ViewColumn.One);
-    currentPanel.webview.html = buildHtml(data, currentPanel.webview, extensionUri);
+    currentPanel.webview.html = buildHtml(data, currentPanel.webview);
     return;
   }
 
@@ -28,16 +29,19 @@ export function showDashboard(
     {
       enableScripts: true,
       localResourceRoots: [extensionUri],
-      retainContextWhenHidden: true,
     }
   );
 
   currentPanel.iconPath = new vscode.ThemeIcon('copilot');
-  currentPanel.webview.html = buildHtml(data, currentPanel.webview, extensionUri);
+  currentPanel.webview.html = buildHtml(data, currentPanel.webview);
 
   currentPanel.webview.onDidReceiveMessage(async (msg) => {
     if (messageHandler) {
-      await messageHandler(msg);
+      try {
+        await messageHandler(msg);
+      } catch {
+        // Errors handled by the message handler's caller
+      }
     }
   });
 
@@ -65,16 +69,11 @@ export function disposeDashboard(): void {
   }
 }
 
-function buildHtml(data: UsageData, webview: vscode.Webview, _extensionUri: vscode.Uri): string {
+function buildHtml(data: UsageData, webview: vscode.Webview): string {
   const nonce = getNonce();
   return getWebviewHtml(data, webview, nonce);
 }
 
 function getNonce(): string {
-  let text = '';
-  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
+  return crypto.randomBytes(16).toString('hex');
 }
