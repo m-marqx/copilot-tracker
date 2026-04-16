@@ -55,12 +55,6 @@ export interface DailyBillingUsageItem {
   netAmount: number;
 }
 
-export interface DailyBillingResponse {
-  timePeriod: { year: number; month: number; day: number };
-  user: string;
-  usageItems: DailyBillingUsageItem[];
-}
-
 const axiosInstance = axios.create({
   baseURL: GITHUB_API_BASE,
   validateStatus: () => true,
@@ -252,27 +246,19 @@ export async function resolveToken(
 }
 
 /**
- * Fetches daily billing usage from the premium_request/usage endpoint.
- * Endpoint: GET /users/{username}/settings/billing/premium_request/usage?year=YYYY&month=M&day=D
+ * Fetches billing usage from the premium_request/usage endpoint.
+ * Endpoint: GET /users/{username}/settings/billing/premium_request/usage
  */
-export async function fetchDailyBillingUsage(
+export async function fetchPremiumBillingUsage(
   token: string,
   username: string,
-  year: number,
-  month: number,
-  day: number,
-): Promise<DailyBillingResponse> {
+): Promise<DailyBillingUsageItem[]> {
   const url = `/users/${encodeURIComponent(username)}/settings/billing/premium_request/usage`;
   const response = await axiosInstance.get(url, {
     headers: buildHeaders(token),
-    params: { year, month, day },
   });
   throwOnHttpError(response, url);
 
-  const data = response.data as DailyBillingResponse;
-  return {
-    timePeriod: data.timePeriod ?? { year, month, day },
-    user: data.user ?? username,
-    usageItems: data.usageItems ?? [],
-  };
+  const data = response.data as { usageItems?: DailyBillingUsageItem[] };
+  return data.usageItems ?? [];
 }
