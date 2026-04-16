@@ -259,3 +259,26 @@ export async function fetchPremiumBillingUsage(
   const data = response.data as { usageItems?: DailyBillingUsageItem[] };
   return data.usageItems ?? [];
 }
+
+/**
+ * Fetches daily billing usage from the premium_request/usage endpoint.
+ * Endpoint: GET /users/{username}/settings/billing/premium_request/usage?day={day}
+ *
+ * When the `day` query param is specified, only results for that single day
+ * are returned. Year and month default to the current period.
+ */
+export async function fetchDailyPremiumBillingUsage(
+  token: string,
+  username: string,
+): Promise<DailyBillingUsageItem[]> {
+  const day = new Date().getUTCDate();
+  const url = `/users/${encodeURIComponent(username)}/settings/billing/premium_request/usage`;
+  const response = await axiosInstance.get(url, {
+    headers: buildHeaders(token),
+    params: { day },
+  });
+  throwOnHttpError(response, url);
+
+  const data = response.data as { usageItems?: DailyBillingUsageItem[] };
+  return data.usageItems ?? [];
+}

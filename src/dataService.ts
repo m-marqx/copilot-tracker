@@ -6,6 +6,7 @@ import {
   fetchCopilotBusinessQuota,
   fetchBillingUsage,
   fetchPremiumBillingUsage,
+  fetchDailyPremiumBillingUsage,
   fetchUsername,
   resolveToken,
   TokenExpiredError,
@@ -32,6 +33,7 @@ export interface UsageData {
   dataSource: 'api' | 'manual';
   lastFetchedAt?: number;
   resetAt?: string;
+  dailyUsage?: number;
 }
 
 const STORAGE_KEY_MODELS = 'copilotTracker.models';
@@ -46,11 +48,14 @@ const BILLING_TOKEN_KEY = 'copilotTracker.billingToken';
 export class DataService {
   private cachedQuota: CopilotQuota | null = null;
   private cachedPremiumBillingItems: DailyBillingUsageItem[] = [];
+  private cachedDailyBillingItems: DailyBillingUsageItem[] = [];
   private lastFetchedAt = 0;
   private lastBillingFetchedAt = 0;
+  private lastDailyBillingFetchedAt = 0;
   private lastError: string | null = null;
   private fetchInFlight: Promise<CopilotQuota | null> | null = null;
   private billingInFlight: Promise<DailyBillingUsageItem[]> | null = null;
+  private dailyBillingInFlight: Promise<DailyBillingUsageItem[]> | null = null;
   private billingItemsInFlight: Promise<void> | null = null;
   private _billingTokenNeeded = false;
   private _billingTokenNoticeConsumed = false;
@@ -194,6 +199,9 @@ export class DataService {
       dataSource,
       lastFetchedAt: this.lastFetchedAt || undefined,
       resetAt: this.cachedQuota?.resetAt || undefined,
+      dailyUsage: this.cachedDailyBillingItems.length > 0
+        ? this.cachedDailyBillingItems.reduce((sum, i) => sum + (i.grossQuantity ?? 0), 0)
+        : undefined,
     };
   }
 
@@ -205,6 +213,7 @@ export class DataService {
   forceRefresh(): void {
     this.lastFetchedAt = 0;
     this.lastBillingFetchedAt = 0;
+    this.lastDailyBillingFetchedAt = 0;
     // Do NOT null in-flight promises — that would bypass coalescing
     // and spawn parallel duplicate API requests.
     // The next call after the current request completes will see
@@ -227,7 +236,10 @@ export class DataService {
 
   private async doFetchAllBillingItems(): Promise<void> {
     try {
-      await this.fetchBillingRange();
+      await Promise.all([
+        this.fetchBillingRange(),
+        this.fetchDailyBilling(),
+      ]);
     } catch (e) {
       if (e instanceof TokenExpiredError || e instanceof RateLimitError) { throw e; }
       this.lastError = 'Failed to fetch billing details';
@@ -308,6 +320,50 @@ export class DataService {
     return this.cachedPremiumBillingItems;
   }
 
+  /**
+   * Fetches daily premium billing usage (current UTC day) and returns all usage items.
+   * Returns cached data if available and recent; otherwise fetches fresh.
+   */
+  async fetchDailyBilling(force: boolean = false): Promise<DailyBillingUsageItem[]> {
+    if (!force && this.lastDailyBillingFetchedAt > 0
+        && Date.now() - this.lastDailyBillingFetchedAt < MIN_FETCH_INTERVAL_MS) {
+      return this.cachedDailyBillingItems;
+    }
+
+    if (this.dailyBillingInFlight) { return this.dailyBillingInFlight; }
+
+    this.dailyBillingInFlight = this.doFetchDailyBilling();
+    try {
+      return await this.dailyBillingInFlight;
+    } finally {
+      this.dailyBillingInFlight = null;
+    }
+  }
+
+  private async doFetchDailyBilling(): Promise<DailyBillingUsageItem[]> {
+    const oauthToken = await resolveToken(false);
+    if (!oauthToken) { throw new Error('No token available for daily billing API'); }
+
+    const billingToken = await this.getBillingToken() ?? oauthToken;
+    const username = await this.resolveUsername(oauthToken);
+
+    try {
+      const items = await fetchDailyPremiumBillingUsage(billingToken, username);
+      this.cachedDailyBillingItems = items;
+      return items;
+    } catch (e) {
+      if (isBillingPermissionError(e)) { this._billingTokenNeeded = true; }
+      throw e;
+    } finally {
+      this.lastDailyBillingFetchedAt = Date.now();
+    }
+  }
+
+  /** Returns cached daily billing items (if any) without fetching. */
+  getCachedDailyBilling(): DailyBillingUsageItem[] {
+    return this.cachedDailyBillingItems;
+  }
+
   isBillingTokenNeeded(): boolean {
     return this._billingTokenNeeded;
   }
@@ -384,8 +440,10 @@ export class DataService {
     await this.globalState.update(STORAGE_KEY_USERNAME, undefined);
     this.cachedQuota = null;
     this.cachedPremiumBillingItems = [];
+    this.cachedDailyBillingItems = [];
     this.lastFetchedAt = 0;
     this.lastBillingFetchedAt = 0;
+    this.lastDailyBillingFetchedAt = 0;
     this.lastError = null;
   }
 }
