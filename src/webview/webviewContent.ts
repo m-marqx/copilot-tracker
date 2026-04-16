@@ -18,7 +18,7 @@ export function getWebviewHtml(
   const usagePercent = limit > 0 ? Math.min((totalUsage / limit) * 100, 100) : 0;
 
   // Enhanced pacing metrics
-  const allowance = pacing.dailyAllowance;
+  const allowance = pacing.dailyAllowance.toFixed(2);
   const formattedPacingBanked = pacing.banked.toFixed(1);
   const bankedStr = pacing.banked >= 0
     ? `+${formattedPacingBanked} saved`
@@ -26,12 +26,6 @@ export function getWebviewHtml(
   const bankedClass = pacing.banked >= 0 ? 'ok' : 'danger';
   const statusEmoji = status === 'ahead' ? '🚀' : status === 'on-track' ? '✓' : status === 'over-budget' ? '🔥' : '💀';
   const statusLabel = status === 'ahead' ? 'Ahead of schedule' : status === 'on-track' ? 'On track' : status === 'over-budget' ? 'Over budget' : 'Exhausted';
-
-  // Bar chart widths (scaled to 20 chars width, mapped to %)
-  const maxRate = Math.max(pacing.baseDailyBudget, pacing.avgDailyUsage, pacing.dailyAllowance, 1);
-  const budgetBarPct = Math.min(100, (pacing.baseDailyBudget / maxRate) * 100);
-  const avgBarPct = Math.min(100, (pacing.avgDailyUsage / maxRate) * 100);
-  const allowanceBarPct = Math.min(100, (pacing.dailyAllowance / maxRate) * 100);
 
   const sourceLabel = dataSource === 'api' ? 'Auto-fetched from GitHub API' : 'Manual data';
   const lastFetchedLabel = lastFetchedAt
@@ -246,87 +240,54 @@ export function getWebviewHtml(
 
     /* Daily Budget Section */
     .daily-budget {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .daily-budget .budget-card {
       background-color: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
       border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
       border-radius: 0.5rem;
       padding: 1.25rem;
-      margin-bottom: 1.5rem;
     }
 
-    .daily-budget h2 {
+    .daily-budget .budget-card h2 {
       font-size: 1rem;
       font-weight: 600;
       margin-bottom: 1rem;
       color: var(--vscode-foreground);
     }
 
-    .daily-budget .status-line {
-      font-size: 1rem;
-      margin-bottom: 0.75rem;
-    }
-
-    .daily-budget .hero-number {
-      font-size: 1.5rem;
-      font-weight: 600;
-      color: var(--vscode-foreground);
-      margin-bottom: 1rem;
-    }
-
-    .rate-chart {
-      margin: 1rem 0;
-      font-family: var(--vscode-editor-font-family, 'Cascadia Code', Consolas, monospace);
-      font-size: 0.75rem;
-    }
-
-    .rate-row {
+    .budget-stat {
       display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      margin-bottom: 0.375rem;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 0.375rem 0;
+      border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, rgba(128,128,128,0.15)));
     }
 
-    .rate-label {
-      width: 5rem;
-      text-align: right;
-      color: var(--vscode-descriptionForeground);
-      font-size: 0.6875rem;
+    .budget-stat:last-child {
+      border-bottom: none;
     }
 
-    .rate-bar-bg {
-      flex: 1;
-      height: 1rem;
-      background-color: var(--vscode-input-background, rgba(128,128,128,0.15));
-      border-radius: 0.1875rem;
-      overflow: hidden;
-    }
-
-    .rate-bar-fill {
-      height: 100%;
-      border-radius: 0.1875rem;
-      transition: width 0.3s ease;
-    }
-
-    .rate-bar-fill.base {
-      background-color: var(--vscode-terminal-ansiBlue, #58a6ff);
-    }
-
-    .rate-bar-fill.avg {
-      background-color: var(--vscode-terminal-ansiYellow, #d29922);
-    }
-
-    .rate-bar-fill.allowance {
-      background-color: var(--vscode-terminal-ansiGreen, #3fb950);
-    }
-
-    .rate-value {
-      width: 5.625rem;
+    .budget-stat-label {
       font-size: 0.75rem;
-      color: var(--vscode-foreground);
+      color: var(--vscode-descriptionForeground);
     }
 
-    .rate-value .indicator {
-      font-size: 0.625rem;
-      color: var(--vscode-descriptionForeground);
+    .budget-stat-value {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--vscode-foreground);
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (max-width: 37.5rem) {
+      .daily-budget {
+        grid-template-columns: 1fr;
+      }
     }
 
     .metrics-grid {
@@ -782,31 +743,51 @@ export function getWebviewHtml(
   </div>
 
   <div class="daily-budget">
-    <h2>Daily budget report</h2>
-    <div class="rate-chart">
-      <div class="rate-row">
-        <span class="rate-label">base rate</span>
-        <div class="rate-bar-bg"><div class="rate-bar-fill base" style="width: ${budgetBarPct.toFixed(1)}%;"></div></div>
-        <span class="rate-value">${pacing.baseDailyBudget.toFixed(1)}/day</span>
+    <div class="budget-card">
+      <h2>Daily rates</h2>
+      <div class="budget-stat">
+        <span class="budget-stat-label">Base rate</span>
+        <span class="budget-stat-value">${pacing.baseDailyBudget.toFixed(2)}/day</span>
       </div>
-      <div class="rate-row">
-        <span class="rate-label">past avg</span>
-        <div class="rate-bar-bg"><div class="rate-bar-fill avg" style="width: ${avgBarPct.toFixed(1)}%;"></div></div>
-        <span class="rate-value">${pacing.avgDailyUsage.toFixed(1)}/day</span>
+      <div class="budget-stat">
+        <span class="budget-stat-label">Past average</span>
+        <span class="budget-stat-value">${pacing.avgDailyUsage.toFixed(2)}/day</span>
       </div>
-      <div class="rate-row">
-        <span class="rate-label">allowance</span>
-        <div class="rate-bar-bg"><div class="rate-bar-fill allowance" style="width: ${allowanceBarPct.toFixed(1)}%;"></div></div>
-        <span class="rate-value">${pacing.dailyAllowance.toFixed(1)}/day</span>
+      <div class="budget-stat">
+        <span class="budget-stat-label">Today's allowance</span>
+        <span class="budget-stat-value">${pacing.dailyAllowance.toFixed(2)}/day</span>
+      </div>
+      <div class="budget-stat">
+        <span class="budget-stat-label">Multiplier</span>
+        <span class="budget-stat-value">${pacing.multiplier.toFixed(2)}x</span>
       </div>
     </div>
-    <div class="metrics-grid">
-      <div class="metric-item"><span class="metric-value ${bankedClass}">${bankedStr}</span> vs expected</div>
-      <div class="metric-item">Projected: <span class="metric-value">~${pacing.projectedEnd.toFixed(1)} / ${limit}</span> by month end${pacing.projectedEnd <= limit ? ' &#x2714;' : ' &#x26A0;'}</div>
-      <div class="metric-item">Day ${pacing.dayOfMonth}/${pacing.daysInMonth} &middot; ${pacing.daysRemaining} days left &middot; ${formatNumber(pacing.remaining)} remaining</div>
-      <div class="metric-item">${(pacing.timeOfDayProgress * 100).toFixed(1)}% through the day</div>
-      ${pacing.overageCost > 0 ? `<div class="metric-item">Overage: ${pacing.overageRequests} requests ($${pacing.overageCost.toFixed(2)})</div>` : ''}
-      ${billedTotal > 0 ? `<div class="metric-item">Billed total: ${formatCurrency(billedTotal)}</div>` : ''}
+    <div class="budget-card">
+      <h2>Forecast</h2>
+      <div class="budget-stat">
+        <span class="budget-stat-label">Banked vs expected</span>
+        <span class="budget-stat-value ${bankedClass}">${bankedStr}</span>
+      </div>
+      <div class="budget-stat">
+        <span class="budget-stat-label">Projected month end</span>
+        <span class="budget-stat-value">~${pacing.projectedEnd.toFixed(1)} / ${limit}${pacing.projectedEnd <= limit ? ' &#x2714;' : ' &#x26A0;'}</span>
+      </div>
+      <div class="budget-stat">
+        <span class="budget-stat-label">Progress</span>
+        <span class="budget-stat-value">Day ${pacing.dayOfMonth}/${pacing.daysInMonth} &middot; ${pacing.daysRemaining} left</span>
+      </div>
+      <div class="budget-stat">
+        <span class="budget-stat-label">Time of day</span>
+        <span class="budget-stat-value">${(pacing.timeOfDayProgress * 100).toFixed(1)}%</span>
+      </div>
+      ${pacing.overageCost > 0 ? `<div class="budget-stat">
+        <span class="budget-stat-label">Overage</span>
+        <span class="budget-stat-value danger">${pacing.overageRequests} reqs ($${pacing.overageCost.toFixed(2)})</span>
+      </div>` : ''}
+      ${billedTotal > 0 ? `<div class="budget-stat">
+        <span class="budget-stat-label">Billed total</span>
+        <span class="budget-stat-value">${formatCurrency(billedTotal)}</span>
+      </div>` : ''}
     </div>
   </div>
 
@@ -836,10 +817,8 @@ export function getWebviewHtml(
       }
     });
 
-    // Billing date range fetch
+    // Billing fetch
     const fetchBillingBtn = document.getElementById('fetchBillingBtn');
-    const billingStartInput = document.getElementById('billingStart');
-    const billingEndInput = document.getElementById('billingEnd');
     const billingTableBody = document.getElementById('billingTableBody');
     const billingTotalRow = document.getElementById('billingTotalRow');
     const billingTable = document.getElementById('billingTable');
@@ -847,15 +826,12 @@ export function getWebviewHtml(
     const billingError = document.getElementById('billingError');
 
     fetchBillingBtn.addEventListener('click', () => {
-      const start = billingStartInput.value;
-      const end = billingEndInput.value;
-      if (!start || !end) return;
       fetchBillingBtn.disabled = true;
       fetchBillingBtn.textContent = 'Fetching...';
       billingLoading.style.display = '';
       billingError.style.display = 'none';
       billingTable.style.display = 'none';
-      vscode.postMessage({ type: 'fetchBillingRange', startDate: start, endDate: end });
+      vscode.postMessage({ type: 'fetchBillingRange' });
     });
 
     // Listen for messages from extension
@@ -876,6 +852,10 @@ export function getWebviewHtml(
           billingError.style.display = '';
           return;
         }
+        // Hide empty state if present
+        const emptyState = document.getElementById('billingEmptyState');
+        if (emptyState) { emptyState.style.display = 'none'; }
+        billingError.style.display = 'none';
         billingTableBody.innerHTML = '';
         let totGrossQty = 0, totGrossAmt = 0, totDiscQty = 0, totDiscAmt = 0, totNetQty = 0, totNetAmt = 0;
         items.forEach(item => {
@@ -957,14 +937,6 @@ function humanizeSku(sku: string): string {
 }
 
 function buildBillingSummarySection(items: BillingUsageItem[]): string {
-  // Default date range: 1st of current month to today
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  const defaultStart = `${y}-${m}-01`;
-  const defaultEnd = `${y}-${m}-${d}`;
-
   // Build static billing summary rows from the old endpoint data (if available)
   let staticRows = '';
   if (items && items.length > 0) {
@@ -985,20 +957,9 @@ function buildBillingSummarySection(items: BillingUsageItem[]): string {
 
   return `
   <div class="billing-summary">
-    <h2>Billing summary <span class="source-badge api" style="font-size:0.625rem;">API</span></h2>
-    <div class="form-row" style="margin-bottom: 1rem; align-items: flex-end;">
-      <div class="form-group">
-        <label for="billingStart">Start date</label>
-        <input type="date" id="billingStart" value="${defaultStart}" />
-      </div>
-      <div class="form-group">
-        <label for="billingEnd">End date</label>
-        <input type="date" id="billingEnd" value="${defaultEnd}" />
-      </div>
-      <div class="form-buttons">
-        <button class="btn btn-primary" id="fetchBillingBtn">Fetch</button>
-      </div>
-    </div>
+    <h2>Billing summary <span class="source-badge api" style="font-size:0.625rem;">API</span>
+      <button class="btn btn-primary" id="fetchBillingBtn" style="margin-left: auto; font-size: 0.75rem; padding: 0.25rem 0.75rem;">Fetch</button>
+    </h2>
     <div id="billingLoading" style="display:none; padding: 1rem; text-align: center; color: var(--vscode-descriptionForeground);">Fetching billing data...</div>
     <div id="billingError" style="display:none; padding: 0.75rem; text-align: center; color: var(--vscode-terminal-ansiRed, #f85149); font-size: 0.8125rem;"></div>
     <table id="billingTable"${items && items.length > 0 ? '' : ' style="display:none"'}>
@@ -1032,8 +993,7 @@ function buildBillingSummarySection(items: BillingUsageItem[]): string {
     </table>
     ${!items || items.length === 0 ? `
     <div class="empty-state" id="billingEmptyState">
-      <p>Select a date range and click "Fetch" to load billing data from the GitHub API.</p>
-      <p><a href="#" onclick="document.getElementById('fetchBillingBtn').click(); return false;">Or click here to load current month &rarr;</a></p>
+      <p>Click "Fetch" to load billing data from the GitHub premium request usage API.</p>
     </div>` : ''}
   </div>`;
 }

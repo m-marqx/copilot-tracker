@@ -25,6 +25,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => {
       showDashboard(dataService.getUsageData(), context.extensionUri);
       setMessageHandler(async (msg) => handleWebviewMessage(msg, context));
+      // Auto-send cached premium billing data (or fetch if available)
+      sendCachedBillingToWebview();
     },
   );
 
@@ -181,16 +183,12 @@ async function handleWebviewMessage(
       break;
     }
     case 'fetchBillingRange': {
-      const startDate = msg.startDate as string;
-      const endDate = msg.endDate as string;
-      if (startDate && endDate) {
-        try {
-          const items = await dataService.fetchBillingRange(startDate, endDate);
-          postMessageToWebview({ type: 'billingRangeResult', items });
-        } catch (e) {
-          const errMsg = e instanceof Error ? e.message : String(e);
-          postMessageToWebview({ type: 'billingRangeResult', items: [], error: errMsg });
-        }
+      try {
+        const items = await dataService.fetchBillingRange(true);
+        postMessageToWebview({ type: 'billingRangeResult', items });
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        postMessageToWebview({ type: 'billingRangeResult', items: [], error: errMsg });
       }
       break;
     }
@@ -241,6 +239,15 @@ function refreshUI(): void {
 function refreshDashboard(context: vscode.ExtensionContext): void {
   showDashboard(dataService.getUsageData(), context.extensionUri);
   setMessageHandler(async (msg) => handleWebviewMessage(msg, context));
+  // Auto-send cached premium billing data so model names are detailed on load
+  sendCachedBillingToWebview();
+}
+
+function sendCachedBillingToWebview(): void {
+  const cached = dataService.getCachedPremiumBilling();
+  if (cached.length > 0) {
+    postMessageToWebview({ type: 'billingRangeResult', items: cached });
+  }
 }
 
 export function deactivate(): void {

@@ -6,7 +6,7 @@ import {
   fetchCopilotInternalQuota,
   fetchCopilotBusinessQuota,
   fetchBillingUsage,
-  fetchDailyBillingUsage,
+  fetchPremiumBillingUsage,
   fetchUsername,
   resolveToken,
   TokenExpiredError,
@@ -46,7 +46,9 @@ const BILLING_TOKEN_KEY = 'copilotTracker.billingToken';
 export class DataService {
   private cachedQuota: CopilotQuota | null = null;
   private cachedBillingItems: BillingUsageItem[] = [];
+  private cachedPremiumBillingItems: DailyBillingUsageItem[] = [];
   private lastFetchedAt = 0;
+  private lastBillingFetchedAt = 0;
   private lastError: string | null = null;
 
   constructor(
@@ -80,8 +82,8 @@ export class DataService {
         if (quota.quota > 0) {
           await this.globalState.update(STORAGE_KEY_LIMIT, quota.quota);
         }
-        // Also fetch billing details (non-blocking)
-        this.fetchBillingItems(token).catch(() => {});
+        // Also fetch billing details (non-blocking, with cache check)
+        this.fetchAllBillingItems(token).catch(() => {});
         return quota;
       }
     } catch (e) {
@@ -98,8 +100,8 @@ export class DataService {
         if (quota.quota > 0) {
           await this.globalState.update(STORAGE_KEY_LIMIT, quota.quota);
         }
-        // Also fetch billing details (non-blocking)
-        this.fetchBillingItems(token).catch(() => {});
+        // Also fetch billing details (non-blocking, with cache check)
+        this.fetchAllBillingItems(token).catch(() => {});
         return quota;
       }
     } catch (e) {
@@ -180,7 +182,9 @@ export class DataService {
   clearCache(): void {
     this.cachedQuota = null;
     this.cachedBillingItems = [];
+    this.cachedPremiumBillingItems = [];
     this.lastFetchedAt = 0;
+    this.lastBillingFetchedAt = 0;
   }
 
   /** Bypass the min-fetch-interval check without discarding cached data. */
@@ -188,7 +192,8 @@ export class DataService {
     this.lastFetchedAt = 0;
   }
 
-  private async fetchBillingItems(token: string): Promise<void> {
+  private async fetchAllBillingItems(token: string): Promise<void> {
+    if (Date.now() - this.lastBillingFetchedAt < MIN_FETCH_INTERVAL_MS) { return; }
     try {
       const billingToken = await this.getBillingToken() ?? token;
       let username = this.getUsername();
@@ -196,8 +201,18 @@ export class DataService {
         username = await fetchUsername(token);
         await this.setUsername(username);
       }
-      const { items } = await fetchBillingUsage(billingToken, username);
-      this.cachedBillingItems = items;
+      // Fetch both old billing items and premium billing items in parallel
+      const [billingResult, premiumItems] = await Promise.allSettled([
+        fetchBillingUsage(billingToken, username),
+        fetchPremiumBillingUsage(billingToken, username),
+      ]);
+      if (billingResult.status === 'fulfilled') {
+        this.cachedBillingItems = billingResult.value.items;
+      }
+      if (premiumItems.status === 'fulfilled') {
+        this.cachedPremiumBillingItems = premiumItems.value;
+      }
+      this.lastBillingFetchedAt = Date.now();
     } catch {
       // Non-blocking — billing details are optional
     }
@@ -216,13 +231,15 @@ export class DataService {
   }
 
   /**
-   * Fetches daily billing data for each day in [startDate, endDate]
-   * and aggregates usage items by model.
+   * Fetches premium billing usage and returns all usage items.
+   * Returns cached data if available and recent; otherwise fetches fresh.
    */
-  async fetchBillingRange(
-    startDate: string,
-    endDate: string,
-  ): Promise<DailyBillingUsageItem[]> {
+  async fetchBillingRange(forceRefresh: boolean = false): Promise<DailyBillingUsageItem[]> {
+    if (!forceRefresh && this.cachedPremiumBillingItems.length > 0
+        && Date.now() - this.lastBillingFetchedAt < MIN_FETCH_INTERVAL_MS) {
+      return this.cachedPremiumBillingItems;
+    }
+
     const token = await this.getBillingToken() ?? await resolveToken(false);
     if (!token) { throw new Error('No token available for billing API'); }
 
@@ -232,44 +249,15 @@ export class DataService {
       await this.setUsername(username);
     }
 
-    const start = new Date(startDate + 'T00:00:00');
-    const end = new Date(endDate + 'T00:00:00');
-    if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
-      throw new Error('Invalid date range');
-    }
+    const items = await fetchPremiumBillingUsage(token, username);
+    this.cachedPremiumBillingItems = items;
+    this.lastBillingFetchedAt = Date.now();
+    return items;
+  }
 
-    const aggregated = new Map<string, DailyBillingUsageItem>();
-    const current = new Date(start);
-
-    while (current <= end) {
-      const year = current.getFullYear();
-      const month = current.getMonth() + 1;
-      const day = current.getDate();
-
-      try {
-        const resp = await fetchDailyBillingUsage(token, username, year, month, day);
-        for (const item of resp.usageItems) {
-          const key = `${item.sku}::${item.model}`;
-          const existing = aggregated.get(key);
-          if (existing) {
-            existing.grossQuantity += item.grossQuantity;
-            existing.grossAmount += item.grossAmount;
-            existing.discountQuantity += item.discountQuantity;
-            existing.discountAmount += item.discountAmount;
-            existing.netQuantity += item.netQuantity;
-            existing.netAmount += item.netAmount;
-          } else {
-            aggregated.set(key, { ...item });
-          }
-        }
-      } catch {
-        // Skip days that fail (e.g. future dates, 404s)
-      }
-
-      current.setDate(current.getDate() + 1);
-    }
-
-    return Array.from(aggregated.values());
+  /** Returns cached premium billing items (if any) without fetching. */
+  getCachedPremiumBilling(): DailyBillingUsageItem[] {
+    return this.cachedPremiumBillingItems;
   }
 
   getModels(): UsageModel[] {
@@ -321,7 +309,9 @@ export class DataService {
     await this.globalState.update(STORAGE_KEY_USERNAME, undefined);
     this.cachedQuota = null;
     this.cachedBillingItems = [];
+    this.cachedPremiumBillingItems = [];
     this.lastFetchedAt = 0;
+    this.lastBillingFetchedAt = 0;
     this.lastError = null;
   }
 }
