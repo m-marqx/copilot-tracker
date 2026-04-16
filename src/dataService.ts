@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import {
   CopilotQuota,
-  BillingUsageItem,
   DailyBillingUsageItem,
   fetchCopilotInternalQuota,
   fetchCopilotBusinessQuota,
@@ -11,7 +10,9 @@ import {
   resolveToken,
   TokenExpiredError,
   RateLimitError,
+  isBillingPermissionError,
 } from './api';
+import { COST_PER_PREMIUM_REQUEST } from './pacing';
 
 export interface UsageModel {
   model: string;
@@ -30,14 +31,13 @@ export interface UsageData {
   dateRange: string;
   dataSource: 'api' | 'manual';
   lastFetchedAt?: number;
-  billingItems: BillingUsageItem[];
+  resetAt?: string;
 }
 
 const STORAGE_KEY_MODELS = 'copilotTracker.models';
 const STORAGE_KEY_LIMIT = 'copilotTracker.limit';
 const STORAGE_KEY_USERNAME = 'copilotTracker.username';
 const DEFAULT_LIMIT = 300;
-export const COST_PER_REQUEST = 0.04;
 
 const MIN_FETCH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -45,11 +45,17 @@ const BILLING_TOKEN_KEY = 'copilotTracker.billingToken';
 
 export class DataService {
   private cachedQuota: CopilotQuota | null = null;
-  private cachedBillingItems: BillingUsageItem[] = [];
   private cachedPremiumBillingItems: DailyBillingUsageItem[] = [];
   private lastFetchedAt = 0;
   private lastBillingFetchedAt = 0;
   private lastError: string | null = null;
+  private fetchInFlight: Promise<CopilotQuota | null> | null = null;
+  private billingInFlight: Promise<DailyBillingUsageItem[]> | null = null;
+  private billingItemsInFlight: Promise<void> | null = null;
+  private _billingTokenNeeded = false;
+  private _billingTokenNoticeConsumed = false;
+  private _noTokenAvailable = false;
+  private _noTokenNoticeConsumed = false;
 
   constructor(
     private readonly globalState: vscode.Memento,
@@ -69,21 +75,32 @@ export class DataService {
       return this.cachedQuota;
     }
 
+    // Coalesce concurrent callers into the same in-flight request
+    if (this.fetchInFlight) { return this.fetchInFlight; }
+
+    this.fetchInFlight = this.doFetchFromApi(interactive);
+    try {
+      return await this.fetchInFlight;
+    } finally {
+      this.fetchInFlight = null;
+    }
+  }
+
+  private async doFetchFromApi(interactive: boolean): Promise<CopilotQuota | null> {
     const token = await resolveToken(interactive);
-    if (!token) { return null; }
+    if (!token) {
+      this._noTokenAvailable = true;
+      return null;
+    }
+    this._noTokenAvailable = false;
+    this._noTokenNoticeConsumed = false;
 
     // Try internal Individual endpoint first
     try {
       const quota = await fetchCopilotInternalQuota(token);
       if (quota) {
-        this.cachedQuota = quota;
-        this.lastFetchedAt = Date.now();
-        this.lastError = null;
-        if (quota.quota > 0) {
-          await this.globalState.update(STORAGE_KEY_LIMIT, quota.quota);
-        }
-        // Also fetch billing details (non-blocking, with cache check)
-        this.fetchAllBillingItems(token).catch(() => {});
+        await this.applyQuota(quota);
+        this.fetchAllBillingItems().catch(() => {});
         return quota;
       }
     } catch (e) {
@@ -94,14 +111,8 @@ export class DataService {
     try {
       const quota = await fetchCopilotBusinessQuota(token);
       if (quota) {
-        this.cachedQuota = quota;
-        this.lastFetchedAt = Date.now();
-        this.lastError = null;
-        if (quota.quota > 0) {
-          await this.globalState.update(STORAGE_KEY_LIMIT, quota.quota);
-        }
-        // Also fetch billing details (non-blocking, with cache check)
-        this.fetchAllBillingItems(token).catch(() => {});
+        await this.applyQuota(quota);
+        this.fetchAllBillingItems().catch(() => {});
         return quota;
       }
     } catch (e) {
@@ -110,15 +121,10 @@ export class DataService {
 
     // Fallback to billing API (requires username)
     try {
-      let username = this.getUsername();
-      if (!username) {
-        username = await fetchUsername(token);
-        await this.setUsername(username);
-      }
+      const username = await this.resolveUsername(token);
 
       const billingToken = await this.getBillingToken() ?? token;
-      const { usedRequests, items } = await fetchBillingUsage(billingToken, username);
-      this.cachedBillingItems = items;
+      const { usedRequests } = await fetchBillingUsage(billingToken, username);
       const limit = this.getLimit();
       const quota: CopilotQuota = {
         used: usedRequests,
@@ -126,14 +132,24 @@ export class DataService {
         quota: limit,
         resetAt: '',
       };
-      this.cachedQuota = quota;
-      this.lastFetchedAt = Date.now();
-      this.lastError = null;
+      await this.applyQuota(quota);
       return quota;
     } catch (e) {
       if (e instanceof TokenExpiredError || e instanceof RateLimitError) { throw e; }
+      if (isBillingPermissionError(e)) { this._billingTokenNeeded = true; }
       this.lastError = e instanceof Error ? e.message : String(e);
       return null;
+    }
+  }
+
+  private async applyQuota(quota: CopilotQuota): Promise<void> {
+    this.cachedQuota = quota;
+    this.lastFetchedAt = Date.now();
+    this.lastError = null;
+    this._billingTokenNeeded = false;
+    this._billingTokenNoticeConsumed = false;
+    if (quota.quota > 0) {
+      await this.globalState.update(STORAGE_KEY_LIMIT, quota.quota);
     }
   }
 
@@ -145,33 +161,39 @@ export class DataService {
     let remaining: number;
     let dataSource: 'api' | 'manual';
 
+    // Single-pass aggregation for manual totals and billed total
+    let manualTotal = 0;
+    let billedTotal = 0;
+    for (const m of models) {
+      manualTotal += m.includedRequests;
+      billedTotal += m.billedAmount;
+    }
+
     if (this.cachedQuota) {
       totalUsage = this.cachedQuota.used;
       remaining = this.cachedQuota.remaining;
       dataSource = 'api';
     } else {
-      totalUsage = models.reduce((sum, m) => sum + m.includedRequests, 0);
+      totalUsage = manualTotal;
       remaining = Math.max(0, limit - totalUsage);
       dataSource = 'manual';
     }
 
-    const billedTotal = models.reduce((sum, m) => sum + m.billedAmount, 0);
-
-    const now = new Date(new Date().getTime() + new Date().getTimezoneOffset() * 60000);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
     const fmt = (d: Date) =>
-      d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 
     return {
-      totalUsage: parseFloat(totalUsage.toFixed(2)),
+      totalUsage,
       limit,
-      remaining: parseFloat(remaining.toFixed(2)),
-      billedTotal: parseFloat(billedTotal.toFixed(2)),
+      remaining,
+      billedTotal,
       models,
       dateRange: `${fmt(monthStart)} – ${fmt(now)}`,
       dataSource,
       lastFetchedAt: this.lastFetchedAt || undefined,
-      billingItems: this.cachedBillingItems,
+      resetAt: this.cachedQuota?.resetAt || undefined,
     };
   }
 
@@ -179,42 +201,36 @@ export class DataService {
     return this.lastError;
   }
 
-  clearCache(): void {
-    this.cachedQuota = null;
-    this.cachedBillingItems = [];
-    this.cachedPremiumBillingItems = [];
-    this.lastFetchedAt = 0;
-    this.lastBillingFetchedAt = 0;
-  }
-
-  /** Bypass the min-fetch-interval check without discarding cached data. */
+  /** Bypass the min-fetch-interval check for one immediate refresh. */
   forceRefresh(): void {
     this.lastFetchedAt = 0;
+    this.lastBillingFetchedAt = 0;
+    // Do NOT null in-flight promises — that would bypass coalescing
+    // and spawn parallel duplicate API requests.
+    // The next call after the current request completes will see
+    // lastFetchedAt = 0 and trigger a fresh fetch.
   }
 
-  private async fetchAllBillingItems(token: string): Promise<void> {
+  private async fetchAllBillingItems(): Promise<void> {
     if (Date.now() - this.lastBillingFetchedAt < MIN_FETCH_INTERVAL_MS) { return; }
+
+    // Coalesce concurrent callers into the same in-flight request
+    if (this.billingItemsInFlight) { return this.billingItemsInFlight; }
+
+    this.billingItemsInFlight = this.doFetchAllBillingItems();
     try {
-      const billingToken = await this.getBillingToken() ?? token;
-      let username = this.getUsername();
-      if (!username) {
-        username = await fetchUsername(token);
-        await this.setUsername(username);
-      }
-      // Fetch both old billing items and premium billing items in parallel
-      const [billingResult, premiumItems] = await Promise.allSettled([
-        fetchBillingUsage(billingToken, username),
-        fetchPremiumBillingUsage(billingToken, username),
-      ]);
-      if (billingResult.status === 'fulfilled') {
-        this.cachedBillingItems = billingResult.value.items;
-      }
-      if (premiumItems.status === 'fulfilled') {
-        this.cachedPremiumBillingItems = premiumItems.value;
-      }
-      this.lastBillingFetchedAt = Date.now();
-    } catch {
-      // Non-blocking — billing details are optional
+      return await this.billingItemsInFlight;
+    } finally {
+      this.billingItemsInFlight = null;
+    }
+  }
+
+  private async doFetchAllBillingItems(): Promise<void> {
+    try {
+      await this.fetchBillingRange();
+    } catch (e) {
+      if (e instanceof TokenExpiredError || e instanceof RateLimitError) { throw e; }
+      this.lastError = 'Failed to fetch billing details';
     }
   }
 
@@ -222,42 +238,100 @@ export class DataService {
     return this.secrets?.get(BILLING_TOKEN_KEY);
   }
 
+  private async resolveUsername(token: string): Promise<string> {
+    let username = this.getUsername();
+    if (!username) {
+      username = await fetchUsername(token);
+      await this.setUsername(username);
+    }
+    return username;
+  }
+
   async setBillingToken(token: string): Promise<void> {
+    if (!token || (!token.startsWith('github_pat_') && !token.startsWith('ghp_'))) {
+      throw new Error('Invalid token format. Expected a GitHub token starting with "github_pat_" or "ghp_".');
+    }
     await this.secrets?.store(BILLING_TOKEN_KEY, token);
+    this._billingTokenNoticeConsumed = false;
   }
 
   async clearBillingToken(): Promise<void> {
     await this.secrets?.delete(BILLING_TOKEN_KEY);
+    this._billingTokenNoticeConsumed = false;
   }
 
   /**
    * Fetches premium billing usage and returns all usage items.
    * Returns cached data if available and recent; otherwise fetches fresh.
    */
-  async fetchBillingRange(forceRefresh: boolean = false): Promise<DailyBillingUsageItem[]> {
-    if (!forceRefresh && this.cachedPremiumBillingItems.length > 0
+  async fetchBillingRange(force: boolean = false): Promise<DailyBillingUsageItem[]> {
+    if (!force && this.lastBillingFetchedAt > 0
         && Date.now() - this.lastBillingFetchedAt < MIN_FETCH_INTERVAL_MS) {
       return this.cachedPremiumBillingItems;
     }
 
-    const token = await this.getBillingToken() ?? await resolveToken(false);
-    if (!token) { throw new Error('No token available for billing API'); }
+    // Coalesce concurrent callers into the same in-flight request
+    if (this.billingInFlight) { return this.billingInFlight; }
 
-    let username = this.getUsername();
-    if (!username) {
-      username = await fetchUsername(token);
-      await this.setUsername(username);
+    this.billingInFlight = this.doFetchBillingRange();
+    try {
+      return await this.billingInFlight;
+    } finally {
+      this.billingInFlight = null;
     }
+  }
 
-    const items = await fetchPremiumBillingUsage(token, username);
-    this.cachedPremiumBillingItems = items;
-    this.lastBillingFetchedAt = Date.now();
-    return items;
+  private async doFetchBillingRange(): Promise<DailyBillingUsageItem[]> {
+    // Always resolve username via OAuth token to avoid caching billing PAT's identity
+    const oauthToken = await resolveToken(false);
+    if (!oauthToken) { throw new Error('No token available for billing API'); }
+
+    const billingToken = await this.getBillingToken() ?? oauthToken;
+    const username = await this.resolveUsername(oauthToken);
+
+    try {
+      const items = await fetchPremiumBillingUsage(billingToken, username);
+      this._billingTokenNeeded = false;
+      this._billingTokenNoticeConsumed = false;
+      this.cachedPremiumBillingItems = items;
+      return items;
+    } catch (e) {
+      if (isBillingPermissionError(e)) { this._billingTokenNeeded = true; }
+      throw e;
+    } finally {
+      this.lastBillingFetchedAt = Date.now();
+    }
   }
 
   /** Returns cached premium billing items (if any) without fetching. */
   getCachedPremiumBilling(): DailyBillingUsageItem[] {
     return this.cachedPremiumBillingItems;
+  }
+
+  isBillingTokenNeeded(): boolean {
+    return this._billingTokenNeeded;
+  }
+
+  /** Returns true once per new billing-token-needed event, then suppresses until reset. */
+  shouldShowBillingTokenNotice(): boolean {
+    if (this._billingTokenNeeded && !this._billingTokenNoticeConsumed) {
+      this._billingTokenNoticeConsumed = true;
+      return true;
+    }
+    return false;
+  }
+
+  isNoTokenAvailable(): boolean {
+    return this._noTokenAvailable;
+  }
+
+  /** Returns true once per new no-token event, then suppresses until reset. */
+  shouldShowNoTokenNotice(): boolean {
+    if (this._noTokenAvailable && !this._noTokenNoticeConsumed) {
+      this._noTokenNoticeConsumed = true;
+      return true;
+    }
+    return false;
   }
 
   getModels(): UsageModel[] {
@@ -277,17 +351,18 @@ export class DataService {
   }
 
   async addModel(model: UsageModel): Promise<void> {
-    model.grossAmount = parseFloat(
-      ((model.includedRequests + model.billedRequests) * COST_PER_REQUEST).toFixed(2),
+    const entry = { ...model };
+    entry.grossAmount = parseFloat(
+      ((entry.includedRequests + entry.billedRequests) * COST_PER_PREMIUM_REQUEST).toFixed(2),
     );
     const models = this.getModels();
     const existing = models.findIndex(
-      (m) => m.model.toLowerCase() === model.model.toLowerCase(),
+      (m) => m.model.toLowerCase() === entry.model.toLowerCase(),
     );
     if (existing >= 0) {
-      models[existing] = model;
+      models[existing] = entry;
     } else {
-      models.push(model);
+      models.push(entry);
     }
     await this.globalState.update(STORAGE_KEY_MODELS, models);
   }
@@ -308,7 +383,6 @@ export class DataService {
     await this.globalState.update(STORAGE_KEY_LIMIT, DEFAULT_LIMIT);
     await this.globalState.update(STORAGE_KEY_USERNAME, undefined);
     this.cachedQuota = null;
-    this.cachedBillingItems = [];
     this.cachedPremiumBillingItems = [];
     this.lastFetchedAt = 0;
     this.lastBillingFetchedAt = 0;
