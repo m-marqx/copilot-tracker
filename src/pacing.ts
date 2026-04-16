@@ -100,6 +100,17 @@ export function calculatePacing(
   };
 }
 
+/** Returns the ratio of used requests to the monthly limit (0–1+). */
+export function getPacingProgress(usedRequests: number, limit: number): number {
+  return limit > 0 ? usedRequests / limit : 0;
+}
+
+/** Returns the fraction of the month elapsed so far (UTC). */
+export function getRecommendedPercentage(now: Date = new Date()): number {
+  const daysInMonth = getDaysInMonth(now);
+  return now.getUTCDate() / daysInMonth;
+}
+
 /** Classify budget health based on daily pacing. */
 export function classifyStatus(result: PacingResult): UsageStatus {
   const { remaining, banked, baseDailyBudget } = result;
