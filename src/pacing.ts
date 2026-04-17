@@ -22,6 +22,9 @@ export interface PacingResult {
 
 export type UsageStatus = 'on-track' | 'over-budget' | 'ahead' | 'exhausted';
 
+// Per-request overage price for Copilot premium requests, in USD. GitHub has
+// adjusted Copilot pricing in the past; if this changes, update here (and
+// consider surfacing as a user setting). See CODE_REVIEW L3.
 export const COST_PER_PREMIUM_REQUEST = 0.04;
 
 export function getDaysInMonth(date: Date = new Date()): number {
@@ -57,16 +60,21 @@ export function calculatePacing(
   // Time-of-day progress (0.0 at midnight UTC, ~1.0 at end of day)
   const timeOfDayProgress = (now.getUTCHours() * 60 + now.getUTCMinutes()) / (24 * 60);
 
-  // Average daily usage (smoothly includes partial current day)
-  const effectiveDaysElapsed = Math.max(0.1, dayOfMonth - 1 + timeOfDayProgress);
-  const avgDailyUsage = usedRequests / effectiveDaysElapsed;
+  // Average daily usage (smoothly includes partial current day).
+  // Use a time-of-day-aware floor so day-1 at 00:05 UTC doesn't divide by 0.1
+  // and produce a 10x projection artifact. See CODE_REVIEW M1.
+  const effectiveDaysElapsed = Math.max(timeOfDayProgress, dayOfMonth - 1 + timeOfDayProgress);
+  const avgDailyUsage = effectiveDaysElapsed > 0 ? usedRequests / effectiveDaysElapsed : 0;
 
   // Expected usage by now (smooth intra-day)
   const expectedByNow = effectiveDaysElapsed * baseDailyBudget;
   const banked = expectedByNow - usedRequests; // positive = saved, negative = overspent
 
   const multiplier = baseDailyBudget > 0 ? dailyAllowance / baseDailyBudget : 1;
-  const projectedEnd = dayOfMonth > 0
+  // `dayOfMonth` is always in [1, 31] (getUTCDate), so the prior ternary guard
+  // was unreachable. Suppress the projection while we have < ~1h of data to
+  // avoid wild extrapolations at the start of the month.
+  const projectedEnd = effectiveDaysElapsed > 0.05
     ? (usedRequests / effectiveDaysElapsed) * daysInMonth
     : 0;
 
