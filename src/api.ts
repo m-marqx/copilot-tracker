@@ -62,11 +62,30 @@ const axiosInstance = axios.create({
   validateStatus: () => true,
 });
 
+// GitHub REST API version pin. `2026-03-10` is the current GA version at the
+// time of writing (April 2026). Bump when GitHub publishes a newer GA version
+// and the payload shape changes. See CODE_REVIEW L2.
+const GITHUB_API_VERSION = '2026-03-10';
+
 function buildHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
     Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2026-03-10',
+    'X-GitHub-Api-Version': GITHUB_API_VERSION,
+  };
+}
+
+// Internal Copilot endpoints historically accept only the legacy `token`
+// scheme and a plain JSON Accept. Keep this separate helper so a future
+// edit to `buildHeaders` can't silently drift from the internal call sites.
+function buildInternalHeaders(
+  token: string,
+  extra: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    Authorization: `token ${token}`,
+    Accept: 'application/json',
+    ...extra,
   };
 }
 
@@ -77,13 +96,24 @@ function throwOnHttpError(response: AxiosResponse, url: string): void {
   if (status === 404) { throw new NotFoundError(url); }
   if (status === 429) {
     const retryHeader = response.headers['retry-after'] as string | undefined;
-    const retryAfter = retryHeader ? parseInt(retryHeader, 10) : 60;
     throw new RateLimitError(
       `GitHub API rate limit exceeded (429): ${url}`,
-      isNaN(retryAfter) ? 60 : retryAfter,
+      parseRetryAfter(retryHeader),
     );
   }
   throw new Error(`GitHub API ${status}: ${url}`);
+}
+
+/**
+ * Parses a `Retry-After` header value (numeric seconds) with a sane floor.
+ * Exported for regression tests (see CODE_REVIEW L4). GitHub may legitimately
+ * send `0` or a past value which would otherwise trigger a tight refresh loop.
+ */
+export function parseRetryAfter(header: string | undefined): number {
+  if (!header) { return 60; }
+  const parsed = parseInt(header, 10);
+  if (isNaN(parsed)) { return 60; }
+  return Math.max(1, parsed);
 }
 
 /**
@@ -107,12 +137,10 @@ export async function fetchCopilotInternalQuota(
 ): Promise<CopilotQuota | null> {
   const url = `/copilot_internal/v2/token`;
   const response = await axiosInstance.get(url, {
-    headers: {
-      Authorization: `token ${token}`,
-      Accept: 'application/json',
+    headers: buildInternalHeaders(token, {
       'editor-version': 'vscode/1.90.0',
       'editor-plugin-version': 'copilot-tracker/1.0.0',
-    },
+    }),
   });
 
   throwOnInternalEndpointError(response, url);
@@ -143,10 +171,7 @@ export async function fetchCopilotBusinessQuota(
 ): Promise<CopilotQuota | null> {
   const url = `/copilot_internal/user`;
   const response = await axiosInstance.get(url, {
-    headers: {
-      Authorization: `token ${token}`,
-      Accept: 'application/json',
-    },
+    headers: buildInternalHeaders(token),
   });
 
   throwOnInternalEndpointError(response, url);
@@ -270,8 +295,8 @@ export async function fetchPremiumBillingUsage(
 export async function fetchDailyPremiumBillingUsage(
   token: string,
   username: string,
+  day: number = new Date().getUTCDate(),
 ): Promise<DailyBillingUsageItem[]> {
-  const day = new Date().getUTCDate();
   const url = `/users/${encodeURIComponent(username)}/settings/billing/premium_request/usage`;
   const response = await axiosInstance.get(url, {
     headers: buildHeaders(token),
