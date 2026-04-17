@@ -2,7 +2,7 @@
   "name": "copilot-premium-tracker",
   "displayName": "Copilot Premium Request Tracker",
   "description": "Track GitHub Copilot Premium request usage with pacing progress in the status bar and a detailed analytics dashboard.",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "author": "Archie Marques",
   "publisher": "m-marqx",
   "icon": "assets/icon.png",
@@ -86,6 +86,7 @@
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "lint": "tsc --noEmit",
+    "test": "mocha",
     "deploy": "npm install && npm run compile && vsce package && vsce publish"
   },
   "devDependencies": {
