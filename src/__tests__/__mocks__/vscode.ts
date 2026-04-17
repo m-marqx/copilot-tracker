@@ -6,7 +6,9 @@
 
 export class MockMemento {
   private store = new Map<string, any>();
-  get<T>(key: string, defaultValue?: T): T {
+  get<T>(key: string): T | undefined;
+  get<T>(key: string, defaultValue: T): T;
+  get<T>(key: string, defaultValue?: T): T | undefined {
     return this.store.has(key) ? this.store.get(key) : defaultValue;
   }
   async update(key: string, value: any): Promise<void> {
@@ -73,6 +75,10 @@ export class Uri {
   }
   static file(path: string): Uri {
     return new Uri('file', '', path);
+  }
+  static joinPath(base: Uri, ...segments: string[]): Uri {
+    const joined = [base.path, ...segments].join('/').replace(/\/+/g, '/');
+    return new Uri(base.scheme, base.authority, joined, base.query, base.fragment);
   }
   toString(): string {
     return `${this.scheme}://${this.authority}${this.path}`;
