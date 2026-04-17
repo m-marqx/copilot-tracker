@@ -80,8 +80,8 @@ describe('dataService – positive tests', () => {
     it('should compute grossAmount on addModel', async () => {
       await ds.addModel({ model: 'Claude', includedRequests: 50, billedRequests: 10, grossAmount: 0, billedAmount: 0.40 });
       const models = ds.getModels();
-      // (50 + 10) * 0.04 = 2.40
-      expect(models[0].grossAmount).to.equal(2.40);
+      // Only billed requests incur cost (CODE_REVIEW C3): 10 * 0.04 = 0.40.
+      expect(models[0].grossAmount).to.equal(0.40);
     });
   });
 

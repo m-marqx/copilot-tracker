@@ -38,12 +38,24 @@ export interface UsageData {
 
 const STORAGE_KEY_MODELS = 'copilotTracker.models';
 const STORAGE_KEY_LIMIT = 'copilotTracker.limit';
+const STORAGE_KEY_LIMIT_USER_SET = 'copilotTracker.limitUserSet';
 const STORAGE_KEY_USERNAME = 'copilotTracker.username';
+const STORAGE_KEY_WINNING_ENDPOINT = 'copilotTracker.winningEndpoint';
+type EndpointKey = 'individual' | 'business' | 'billing';
 const DEFAULT_LIMIT = 300;
 
 const MIN_FETCH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 const BILLING_TOKEN_KEY = 'copilotTracker.billingToken';
+
+// Cached at module scope so `getUsageData` (called on every status-bar tick)
+// doesn't rebuild the formatter twice per call. See PERFORMANCE_REVIEW M3.
+const DATE_RANGE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  timeZone: 'UTC',
+});
 
 export class DataService {
   private cachedQuota: CopilotQuota | null = null;
@@ -53,10 +65,9 @@ export class DataService {
   private lastBillingFetchedAt = 0;
   private lastDailyBillingFetchedAt = 0;
   private lastError: string | null = null;
-  private fetchInFlight: Promise<CopilotQuota | null> | null = null;
+  private quotaInFlight: Promise<CopilotQuota | null> | null = null;
   private billingInFlight: Promise<DailyBillingUsageItem[]> | null = null;
   private dailyBillingInFlight: Promise<DailyBillingUsageItem[]> | null = null;
-  private billingItemsInFlight: Promise<void> | null = null;
   private _billingTokenNeeded = false;
   private _billingTokenNoticeConsumed = false;
   private _noTokenAvailable = false;
@@ -81,13 +92,13 @@ export class DataService {
     }
 
     // Coalesce concurrent callers into the same in-flight request
-    if (this.fetchInFlight) { return this.fetchInFlight; }
+    if (this.quotaInFlight) { return this.quotaInFlight; }
 
-    this.fetchInFlight = this.doFetchFromApi(interactive);
+    this.quotaInFlight = this.doFetchFromApi(interactive);
     try {
-      return await this.fetchInFlight;
+      return await this.quotaInFlight;
     } finally {
-      this.fetchInFlight = null;
+      this.quotaInFlight = null;
     }
   }
 
@@ -100,50 +111,69 @@ export class DataService {
     this._noTokenAvailable = false;
     this._noTokenNoticeConsumed = false;
 
-    // Try internal Individual endpoint first
-    try {
-      const quota = await fetchCopilotInternalQuota(token);
-      if (quota) {
-        await this.applyQuota(quota);
-        this.fetchAllBillingItems().catch(() => {});
-        return quota;
-      }
-    } catch (e) {
-      if (e instanceof TokenExpiredError || e instanceof RateLimitError) { throw e; }
+    // Prefer the endpoint that worked last time. Plan type rarely changes,
+    // so re-probing the full chain on every refresh is wasted traffic.
+    // See PERFORMANCE_REVIEW C2 / F2.
+    const winner = this.globalState.get<EndpointKey>(STORAGE_KEY_WINNING_ENDPOINT);
+    const order: EndpointKey[] = ['individual', 'business', 'billing'];
+    if (winner) {
+      order.sort((a, b) => (a === winner ? -1 : b === winner ? 1 : 0));
     }
 
-    // Try internal Business/Enterprise endpoint
-    try {
-      const quota = await fetchCopilotBusinessQuota(token);
-      if (quota) {
-        await this.applyQuota(quota);
-        this.fetchAllBillingItems().catch(() => {});
-        return quota;
+    for (const step of order) {
+      try {
+        if (step === 'individual') {
+          const quota = await fetchCopilotInternalQuota(token);
+          if (quota) {
+            await this.applyQuota(quota);
+            await this.rememberWinningEndpoint('individual');
+            this.kickOffBillingFetches(token);
+            return quota;
+          }
+        } else if (step === 'business') {
+          const quota = await fetchCopilotBusinessQuota(token);
+          if (quota) {
+            await this.applyQuota(quota);
+            await this.rememberWinningEndpoint('business');
+            this.kickOffBillingFetches(token);
+            return quota;
+          }
+        } else {
+          // Fallback to billing API (requires username).
+          const username = await this.resolveUsername(token);
+          const billingToken = await this.getBillingToken() ?? token;
+          const { usedRequests } = await fetchBillingUsage(billingToken, username);
+          const limit = this.getLimit();
+          const quota: CopilotQuota = {
+            used: usedRequests,
+            remaining: Math.max(0, limit - usedRequests),
+            quota: limit,
+            resetAt: '',
+          };
+          await this.applyQuota(quota);
+          await this.rememberWinningEndpoint('billing');
+          // Still kick off the premium billing details fetch for the dashboard.
+          this.kickOffBillingFetches(token, username);
+          return quota;
+        }
+      } catch (e) {
+        if (e instanceof TokenExpiredError || e instanceof RateLimitError) { throw e; }
+        if (step === 'billing' && isBillingPermissionError(e)) {
+          this._billingTokenNeeded = true;
+        }
+        // Record the last error for surfacing in the UI, but keep probing
+        // remaining endpoints so a flaky Individual endpoint doesn't block
+        // a Business user's quota lookup.
+        this.lastError = e instanceof Error ? e.message : String(e);
       }
-    } catch (e) {
-      if (e instanceof TokenExpiredError || e instanceof RateLimitError) { throw e; }
     }
 
-    // Fallback to billing API (requires username)
-    try {
-      const username = await this.resolveUsername(token);
+    return null;
+  }
 
-      const billingToken = await this.getBillingToken() ?? token;
-      const { usedRequests } = await fetchBillingUsage(billingToken, username);
-      const limit = this.getLimit();
-      const quota: CopilotQuota = {
-        used: usedRequests,
-        remaining: Math.max(0, limit - usedRequests),
-        quota: limit,
-        resetAt: '',
-      };
-      await this.applyQuota(quota);
-      return quota;
-    } catch (e) {
-      if (e instanceof TokenExpiredError || e instanceof RateLimitError) { throw e; }
-      if (isBillingPermissionError(e)) { this._billingTokenNeeded = true; }
-      this.lastError = e instanceof Error ? e.message : String(e);
-      return null;
+  private async rememberWinningEndpoint(key: EndpointKey): Promise<void> {
+    if (this.globalState.get<EndpointKey>(STORAGE_KEY_WINNING_ENDPOINT) !== key) {
+      await this.globalState.update(STORAGE_KEY_WINNING_ENDPOINT, key);
     }
   }
 
@@ -153,7 +183,10 @@ export class DataService {
     this.lastError = null;
     this._billingTokenNeeded = false;
     this._billingTokenNoticeConsumed = false;
-    if (quota.quota > 0) {
+    // Only persist the API-reported limit when the user has not explicitly
+    // overridden it (CODE_REVIEW H4). Also skip no-op writes (F10 / L4).
+    const userSet = this.globalState.get<boolean>(STORAGE_KEY_LIMIT_USER_SET, false);
+    if (!userSet && quota.quota > 0 && quota.quota !== this.getLimit()) {
       await this.globalState.update(STORAGE_KEY_LIMIT, quota.quota);
     }
   }
@@ -186,8 +219,7 @@ export class DataService {
 
     const now = new Date();
     const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    const fmt = (d: Date) =>
-      d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+    const fmt = (d: Date) => DATE_RANGE_FORMATTER.format(d);
 
     return {
       totalUsage,
@@ -220,30 +252,23 @@ export class DataService {
     // lastFetchedAt = 0 and trigger a fresh fetch.
   }
 
-  private async fetchAllBillingItems(): Promise<void> {
-    if (Date.now() - this.lastBillingFetchedAt < MIN_FETCH_INTERVAL_MS) { return; }
-
-    // Coalesce concurrent callers into the same in-flight request
-    if (this.billingItemsInFlight) { return this.billingItemsInFlight; }
-
-    this.billingItemsInFlight = this.doFetchAllBillingItems();
-    try {
-      return await this.billingItemsInFlight;
-    } finally {
-      this.billingItemsInFlight = null;
-    }
-  }
-
-  private async doFetchAllBillingItems(): Promise<void> {
-    try {
-      await Promise.all([
-        this.fetchBillingRange(),
-        this.fetchDailyBilling(),
-      ]);
-    } catch (e) {
-      if (e instanceof TokenExpiredError || e instanceof RateLimitError) { throw e; }
+  /**
+   * Fire-and-forget kickoff for both billing calls. Relies on the per-call
+   * coalescers (`billingInFlight` / `dailyBillingInFlight`) and MIN_FETCH_INTERVAL
+   * to prevent duplicate traffic — no outer wrapper needed.
+   *
+   * Accepts the already-resolved OAuth token (and optionally the username)
+   * from the caller to avoid re-awaiting `vscode.authentication.getSession`
+   * and `GET /user` on every refresh. See PERFORMANCE_REVIEW C3 / F4.
+   */
+  private kickOffBillingFetches(oauthToken?: string, username?: string): void {
+    this.fetchBillingRange(false, oauthToken, username).catch((e) => {
+      if (e instanceof TokenExpiredError || e instanceof RateLimitError) { return; }
       this.lastError = 'Failed to fetch billing details';
-    }
+    });
+    this.fetchDailyBilling(false, oauthToken, username).catch((e) => {
+      if (e instanceof TokenExpiredError || e instanceof RateLimitError) { return; }
+    });
   }
 
   async getBillingToken(): Promise<string | undefined> {
@@ -264,11 +289,15 @@ export class DataService {
       throw new Error('Invalid token format. Expected a GitHub token starting with "github_pat_" or "ghp_".');
     }
     await this.secrets?.store(BILLING_TOKEN_KEY, token);
+    // Invalidate cached username so we don't query billing for a previously
+    // signed-in account after a token change. See CODE_REVIEW C6.
+    await this.globalState.update(STORAGE_KEY_USERNAME, undefined);
     this._billingTokenNoticeConsumed = false;
   }
 
   async clearBillingToken(): Promise<void> {
     await this.secrets?.delete(BILLING_TOKEN_KEY);
+    await this.globalState.update(STORAGE_KEY_USERNAME, undefined);
     this._billingTokenNoticeConsumed = false;
   }
 
@@ -276,7 +305,11 @@ export class DataService {
    * Fetches premium billing usage and returns all usage items.
    * Returns cached data if available and recent; otherwise fetches fresh.
    */
-  async fetchBillingRange(force: boolean = false): Promise<DailyBillingUsageItem[]> {
+  async fetchBillingRange(
+    force: boolean = false,
+    oauthToken?: string,
+    username?: string,
+  ): Promise<DailyBillingUsageItem[]> {
     if (!force && this.lastBillingFetchedAt > 0
         && Date.now() - this.lastBillingFetchedAt < MIN_FETCH_INTERVAL_MS) {
       return this.cachedPremiumBillingItems;
@@ -285,7 +318,7 @@ export class DataService {
     // Coalesce concurrent callers into the same in-flight request
     if (this.billingInFlight) { return this.billingInFlight; }
 
-    this.billingInFlight = this.doFetchBillingRange();
+    this.billingInFlight = this.doFetchBillingRange(oauthToken, username);
     try {
       return await this.billingInFlight;
     } finally {
@@ -293,16 +326,20 @@ export class DataService {
     }
   }
 
-  private async doFetchBillingRange(): Promise<DailyBillingUsageItem[]> {
-    // Always resolve username via OAuth token to avoid caching billing PAT's identity
-    const oauthToken = await resolveToken(false);
-    if (!oauthToken) { throw new Error('No token available for billing API'); }
+  private async doFetchBillingRange(
+    oauthToken?: string,
+    username?: string,
+  ): Promise<DailyBillingUsageItem[]> {
+    // Prefer the caller-provided token/username (already resolved upstream)
+    // to avoid duplicate auth/IPC round-trips per refresh.
+    const token = oauthToken ?? await resolveToken(false);
+    if (!token) { throw new Error('No token available for billing API'); }
 
-    const billingToken = await this.getBillingToken() ?? oauthToken;
-    const username = await this.resolveUsername(oauthToken);
+    const billingToken = await this.getBillingToken() ?? token;
+    const resolvedUsername = username ?? await this.resolveUsername(token);
 
     try {
-      const items = await fetchPremiumBillingUsage(billingToken, username);
+      const items = await fetchPremiumBillingUsage(billingToken, resolvedUsername);
       this._billingTokenNeeded = false;
       this._billingTokenNoticeConsumed = false;
       this.cachedPremiumBillingItems = items;
@@ -324,7 +361,11 @@ export class DataService {
    * Fetches daily premium billing usage (current UTC day) and returns all usage items.
    * Returns cached data if available and recent; otherwise fetches fresh.
    */
-  async fetchDailyBilling(force: boolean = false): Promise<DailyBillingUsageItem[]> {
+  async fetchDailyBilling(
+    force: boolean = false,
+    oauthToken?: string,
+    username?: string,
+  ): Promise<DailyBillingUsageItem[]> {
     if (!force && this.lastDailyBillingFetchedAt > 0
         && Date.now() - this.lastDailyBillingFetchedAt < MIN_FETCH_INTERVAL_MS) {
       return this.cachedDailyBillingItems;
@@ -332,7 +373,7 @@ export class DataService {
 
     if (this.dailyBillingInFlight) { return this.dailyBillingInFlight; }
 
-    this.dailyBillingInFlight = this.doFetchDailyBilling();
+    this.dailyBillingInFlight = this.doFetchDailyBilling(oauthToken, username);
     try {
       return await this.dailyBillingInFlight;
     } finally {
@@ -340,15 +381,18 @@ export class DataService {
     }
   }
 
-  private async doFetchDailyBilling(): Promise<DailyBillingUsageItem[]> {
-    const oauthToken = await resolveToken(false);
-    if (!oauthToken) { throw new Error('No token available for daily billing API'); }
+  private async doFetchDailyBilling(
+    oauthToken?: string,
+    username?: string,
+  ): Promise<DailyBillingUsageItem[]> {
+    const token = oauthToken ?? await resolveToken(false);
+    if (!token) { throw new Error('No token available for daily billing API'); }
 
-    const billingToken = await this.getBillingToken() ?? oauthToken;
-    const username = await this.resolveUsername(oauthToken);
+    const billingToken = await this.getBillingToken() ?? token;
+    const resolvedUsername = username ?? await this.resolveUsername(token);
 
     try {
-      const items = await fetchDailyPremiumBillingUsage(billingToken, username);
+      const items = await fetchDailyPremiumBillingUsage(billingToken, resolvedUsername);
       this.cachedDailyBillingItems = items;
       return items;
     } catch (e) {
@@ -408,8 +452,10 @@ export class DataService {
 
   async addModel(model: UsageModel): Promise<void> {
     const entry = { ...model };
+    // Only billed requests incur cost; `includedRequests` are covered by the
+    // monthly allowance. See CODE_REVIEW C3.
     entry.grossAmount = parseFloat(
-      ((entry.includedRequests + entry.billedRequests) * COST_PER_PREMIUM_REQUEST).toFixed(2),
+      (entry.billedRequests * COST_PER_PREMIUM_REQUEST).toFixed(2),
     );
     const models = this.getModels();
     const existing = models.findIndex(
@@ -432,12 +478,16 @@ export class DataService {
 
   async setLimit(limit: number): Promise<void> {
     await this.globalState.update(STORAGE_KEY_LIMIT, limit);
+    // Mark the limit as user-set so `applyQuota` stops auto-overwriting it.
+    await this.globalState.update(STORAGE_KEY_LIMIT_USER_SET, true);
   }
 
   async resetData(): Promise<void> {
     await this.globalState.update(STORAGE_KEY_MODELS, []);
     await this.globalState.update(STORAGE_KEY_LIMIT, DEFAULT_LIMIT);
+    await this.globalState.update(STORAGE_KEY_LIMIT_USER_SET, undefined);
     await this.globalState.update(STORAGE_KEY_USERNAME, undefined);
+    await this.globalState.update(STORAGE_KEY_WINNING_ENDPOINT, undefined);
     this.cachedQuota = null;
     this.cachedPremiumBillingItems = [];
     this.cachedDailyBillingItems = [];
