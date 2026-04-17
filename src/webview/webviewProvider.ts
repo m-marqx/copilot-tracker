@@ -1,9 +1,10 @@
-import * as vscode from 'vscode';
+﻿import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { UsageData } from '../dataService';
-import { getWebviewHtml } from './webviewContent';
+import { buildDashboardViewModel, getWebviewHtml } from './webviewContent';
 
 let currentPanel: vscode.WebviewPanel | undefined;
+let currentExtensionUri: vscode.Uri | undefined;
 let messageHandler: ((msg: { type: string; [key: string]: unknown }) => Promise<void>) | undefined;
 
 export function setMessageHandler(
@@ -14,13 +15,18 @@ export function setMessageHandler(
 
 export function showDashboard(
   data: UsageData,
-  extensionUri: vscode.Uri
+  extensionUri: vscode.Uri,
+  now: Date = new Date(),
 ): void {
   if (currentPanel) {
     currentPanel.reveal(vscode.ViewColumn.One);
-    currentPanel.webview.html = buildHtml(data, currentPanel.webview);
+    // Panel already open â€” prefer the lightweight message-patching path over
+    // rebuilding the full HTML string (PERFORMANCE_REVIEW M1 / CODE_REVIEW H3).
+    updateDashboardData(data, now);
     return;
   }
+
+  currentExtensionUri = extensionUri;
 
   currentPanel = vscode.window.createWebviewPanel(
     'copilotPremiumDashboard',
@@ -33,7 +39,7 @@ export function showDashboard(
   );
 
   currentPanel.iconPath = new vscode.ThemeIcon('copilot');
-  currentPanel.webview.html = buildHtml(data, currentPanel.webview);
+  currentPanel.webview.html = buildHtml(data, currentPanel.webview, extensionUri, now);
 
   currentPanel.webview.onDidReceiveMessage(async (msg) => {
     if (messageHandler) {
@@ -47,6 +53,7 @@ export function showDashboard(
 
   currentPanel.onDidDispose(() => {
     currentPanel = undefined;
+    currentExtensionUri = undefined;
     messageHandler = undefined;
   });
 }
@@ -61,19 +68,40 @@ export function postMessageToWebview(message: unknown): void {
   }
 }
 
+/**
+ * Push an incremental `updateData` message carrying a pre-computed view-model.
+ * Cheap compared to rebuilding the full HTML and preserves form focus / CSS
+ * transitions. Silently no-ops if the panel has been disposed.
+ */
+export function updateDashboardData(data: UsageData, now: Date = new Date()): void {
+  if (!currentPanel) { return; }
+  const viewModel = buildDashboardViewModel(data, now);
+  currentPanel.webview.postMessage({ type: 'updateData', viewModel });
+}
+
 export function disposeDashboard(): void {
   if (currentPanel) {
     currentPanel.dispose();
     currentPanel = undefined;
+    currentExtensionUri = undefined;
     messageHandler = undefined;
   }
 }
 
-function buildHtml(data: UsageData, webview: vscode.Webview): string {
+function buildHtml(
+  data: UsageData,
+  webview: vscode.Webview,
+  extensionUri: vscode.Uri,
+  now: Date,
+): string {
   const nonce = getNonce();
-  return getWebviewHtml(data, webview, nonce);
+  return getWebviewHtml(data, webview, nonce, extensionUri, now);
 }
 
 function getNonce(): string {
   return crypto.randomBytes(16).toString('hex');
+}
+
+export function getActiveExtensionUri(): vscode.Uri | undefined {
+  return currentExtensionUri;
 }
