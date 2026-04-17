@@ -25,17 +25,16 @@ function getStatusBarMode(): 'pacer' | 'classic' {
   return cachedMode;
 }
 
-export function updateStatusBar(item: vscode.StatusBarItem, data: UsageData): void {
+export function updateStatusBar(item: vscode.StatusBarItem, data: UsageData, now: Date = new Date()): void {
   const { totalUsage, limit, remaining } = data;
-  const now = new Date();
   const pacing = calculatePacing(totalUsage, limit, now, remaining);
   const status = classifyStatus(pacing);
   const mode = getStatusBarMode();
 
   if (mode === 'pacer') {
-    renderPacerMode(item, data, pacing, status);
+    renderPacerMode(item, data, pacing);
   } else {
-    renderClassicMode(item, data, pacing, status);
+    renderClassicMode(item, data, pacing);
   }
 
   // Color based on status (shared)
@@ -86,7 +85,6 @@ function renderPacerMode(
   item: vscode.StatusBarItem,
   data: UsageData,
   pacing: ReturnType<typeof calculatePacing>,
-  status: ReturnType<typeof classifyStatus>,
 ): void {
   const bar = generatePacerBar(pacing);
 
@@ -104,7 +102,6 @@ function renderClassicMode(
   item: vscode.StatusBarItem,
   data: UsageData,
   pacing: ReturnType<typeof calculatePacing>,
-  _status: ReturnType<typeof classifyStatus>,
 ): void {
   const { totalUsage, limit } = data;
 
