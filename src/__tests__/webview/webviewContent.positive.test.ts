@@ -40,9 +40,9 @@ describe('webviewContent – positive tests', () => {
       expect(html).to.include('Content-Security-Policy');
     });
 
-    it('should include nonce in script and style tags', () => {
+    it('should include nonce in script tag (CSS is external, no inline styles)', () => {
       const html = getWebviewHtml(makeUsageData(), makeMockWebview(), nonce);
-      expect(html).to.include(`<style nonce="${nonce}">`);
+      expect(html).to.not.include('<style nonce=');
       expect(html).to.include(`<script nonce="${nonce}">`);
     });
 

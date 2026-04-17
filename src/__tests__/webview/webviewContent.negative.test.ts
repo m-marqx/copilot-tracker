@@ -67,7 +67,7 @@ describe('webviewContent – negative tests', () => {
       };
       const html = getWebviewHtml(data, makeMockWebview(), nonce);
       expect(html).to.include('<!DOCTYPE html>');
-      expect(html).to.not.include("Today's usage (API)");
+      expect(html).to.match(/id="dailyUsageRow"[^>]*style="display:none"/);
     });
 
     it('should handle very large numbers without NaN', () => {
@@ -89,31 +89,31 @@ describe('webviewContent – negative tests', () => {
       expect(html).to.include('Never');
     });
 
-    it('should not include daily usage section when dailyUsage is undefined', () => {
+    it('should hide daily usage row when dailyUsage is undefined', () => {
       const html = getWebviewHtml(
         makeUsageData({ dailyUsage: undefined }),
         makeMockWebview(),
         nonce,
       );
-      expect(html).to.not.include("Today's usage (API)");
+      expect(html).to.match(/id="dailyUsageRow"[^>]*style="display:none"/);
     });
 
-    it('should not include billed total section when billedTotal is 0', () => {
+    it('should hide billed total row when billedTotal is 0', () => {
       const html = getWebviewHtml(
         makeUsageData({ billedTotal: 0 }),
         makeMockWebview(),
         nonce,
       );
-      expect(html).to.not.include('Billed total');
+      expect(html).to.match(/id="billedTotalRow"[^>]*style="display:none"/);
     });
 
-    it('should not include overage section when under limit', () => {
+    it('should hide overage row when under limit', () => {
       const html = getWebviewHtml(
         makeUsageData({ totalUsage: 100, limit: 300 }),
         makeMockWebview(),
         nonce,
       );
-      expect(html).to.not.include('Overage');
+      expect(html).to.match(/id="overageRow"[^>]*style="display:none"/);
     });
   });
 });

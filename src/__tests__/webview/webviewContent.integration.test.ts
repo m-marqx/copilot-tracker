@@ -66,10 +66,10 @@ describe('webviewContent – integration tests', () => {
       expect(dailyUsagePos).to.be.lessThan(forecastPos);
     });
 
-    it('should not appear when dailyUsage is not set', () => {
+    it('should hide the row when dailyUsage is not set', () => {
       const data = makeUsageData({ dailyUsage: undefined });
       const html = getWebviewHtml(data, makeMockWebview(), nonce);
-      expect(html).to.not.include("Today's usage (API)");
+      expect(html).to.match(/id="dailyUsageRow"[^>]*style="display:none"/);
     });
   });
 

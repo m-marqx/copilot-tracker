@@ -1,771 +1,177 @@
 ﻿import * as vscode from 'vscode';
 import { UsageData } from '../dataService';
-import { calculatePacing, classifyStatus } from '../pacing';
+import { calculatePacing, classifyStatus, PacingResult, UsageStatus } from '../pacing';
+
+/**
+ * HTML-escape a string for safe interpolation into the webview template.
+ * The CSP nonce mitigates inline-script execution but does not prevent
+ * HTML injection; route any untrusted string (API-sourced model names,
+ * error messages, etc.) through this helper.
+ */
+function escapeHtml(input: unknown): string {
+  return String(input)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Serializable view-model posted to the webview. Every field the HTML
+ * template renders is pre-formatted here so the first-open HTML render and
+ * subsequent `updateData` message patches share one source of truth. See
+ * CODE_REVIEW H3 / PERFORMANCE_REVIEW M1.
+ */
+export interface DashboardViewModel {
+  dataSource: 'api' | 'manual';
+  dataSourceLabel: string;
+  subtitle: string;
+  lastFetchedLabel: string;
+  allowance: string;
+  cardDetail: string;
+  totalUsageStr: string;
+  limit: number;
+  pacingClass: 'ok' | 'warning' | 'danger';
+  usagePercentStr: string;
+  targetText: string;
+  pacingBadgeText: string;
+  remainingStr: string;
+  remainingDetail: string;
+  baseRate: string;
+  pastAvg: string;
+  todayAllowance: string;
+  multiplier: string;
+  dailyUsage: string | null;
+  banked: { text: string; className: 'ok' | 'danger' };
+  projected: string;
+  progress: string;
+  timeOfDay: string;
+  overage: string | null;
+  billedTotal: string | null;
+}
+
+function fmtN(n: number): string {
+  return n % 1 === 0 ? n.toFixed(0) : n.toFixed(2);
+}
+
+function getProgressClass(pacing: number): 'ok' | 'warning' | 'danger' {
+  if (pacing > 1.0) { return 'danger'; }
+  if (pacing > 0.8) { return 'warning'; }
+  return 'ok';
+}
+
+/**
+ * Pure data-shape transformation for the dashboard. Accepts an optional `now`
+ * so callers can thread a single wall-clock timestamp through pacing,
+ * status-bar, and webview render (PERFORMANCE_REVIEW L2).
+ */
+export function buildDashboardViewModel(data: UsageData, now: Date = new Date()): DashboardViewModel {
+  const { totalUsage, limit, remaining, billedTotal, dataSource, lastFetchedAt, resetAt, dailyUsage } = data;
+  const pacing: PacingResult = calculatePacing(totalUsage, limit, now, remaining);
+  const status: UsageStatus = classifyStatus(pacing);
+
+  const recommendedPct = pacing.dayOfMonth / pacing.daysInMonth;
+  const pacingRatio = pacing.expectedByNow > 0 ? totalUsage / pacing.expectedByNow : 0;
+  const pacingPercent = pacingRatio * 100;
+  const target = parseFloat((recommendedPct * limit).toFixed(2));
+  const usagePercent = limit > 0 ? Math.min((totalUsage / limit) * 100, 100) : 0;
+  const pacingClass = getProgressClass(pacingRatio);
+
+  const resetAtLabel = resetAt
+    ? new Date(resetAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+    : '';
+
+  const formattedPacingBanked = pacing.banked.toFixed(1);
+  const bankedText = pacing.banked >= 0
+    ? `+${formattedPacingBanked} saved`
+    : `${formattedPacingBanked} overspent`;
+  const bankedClass: 'ok' | 'danger' = pacing.banked >= 0 ? 'ok' : 'danger';
+
+  const statusEmoji = status === 'ahead' ? '\u{1F680}' : status === 'on-track' ? '\u2713' : status === 'over-budget' ? '\u{1F525}' : '\u{1F480}';
+  const statusLabel = status === 'ahead' ? 'Ahead of schedule' : status === 'on-track' ? 'On track' : status === 'over-budget' ? 'Over budget' : 'Exhausted';
+  const cardDetail = `${statusEmoji} ${statusLabel}${pacing.multiplier !== 1 ? ` \u00b7 ${pacing.multiplier.toFixed(1)}x base rate` : ''}`;
+
+  const subtitleBase = dataSource === 'api'
+    ? 'Live usage data from GitHub Copilot API.'
+    : 'Manual data mode. Click Refresh to fetch from GitHub API.';
+  const subtitle = resetAtLabel ? `${subtitleBase} Quota resets ${resetAtLabel}.` : subtitleBase;
+
+  const lastFetchedLabel = lastFetchedAt ? new Date(lastFetchedAt).toLocaleTimeString() : 'Never';
+
+  const projectedCheck = pacing.projectedEnd <= limit ? ' \u2714' : ' \u26A0';
+
+  return {
+    dataSource,
+    dataSourceLabel: dataSource === 'api' ? 'Live' : 'Manual',
+    subtitle,
+    lastFetchedLabel,
+    allowance: pacing.dailyAllowance.toFixed(2),
+    cardDetail,
+    totalUsageStr: fmtN(totalUsage),
+    limit,
+    pacingClass,
+    usagePercentStr: usagePercent.toFixed(1),
+    targetText: `Target for today: ${fmtN(target)} (${(recommendedPct * 100).toFixed(1)}% of month)`,
+    pacingBadgeText: `Pacing: ${pacingPercent.toFixed(1)}%`,
+    remainingStr: fmtN(pacing.remaining),
+    remainingDetail: `${pacing.daysRemaining} days left \u00b7 Day ${pacing.dayOfMonth}/${pacing.daysInMonth}`,
+    baseRate: `${pacing.baseDailyBudget.toFixed(2)}/day`,
+    pastAvg: `${pacing.avgDailyUsage.toFixed(2)}/day`,
+    todayAllowance: `${pacing.dailyAllowance.toFixed(2)}/day`,
+    multiplier: `${pacing.multiplier.toFixed(2)}x`,
+    dailyUsage: dailyUsage !== undefined ? fmtN(dailyUsage) : null,
+    banked: { text: bankedText, className: bankedClass },
+    projected: `~${pacing.projectedEnd.toFixed(1)} / ${limit}${projectedCheck}`,
+    progress: `Day ${pacing.dayOfMonth}/${pacing.daysInMonth} \u00b7 ${pacing.daysRemaining} left`,
+    timeOfDay: `${(pacing.timeOfDayProgress * 100).toFixed(1)}%`,
+    overage: pacing.overageCost > 0
+      ? `${pacing.overageRequests} reqs ($${pacing.overageCost.toFixed(2)})`
+      : null,
+    billedTotal: billedTotal > 0 ? `$${billedTotal.toFixed(2)}` : null,
+  };
+}
 
 export function getWebviewHtml(
   data: UsageData,
   webview: vscode.Webview,
-  nonce: string
+  nonce: string,
+  extensionUri?: vscode.Uri,
+  now: Date = new Date(),
 ): string {
-  const { totalUsage, limit, remaining, billedTotal, models, dateRange, dataSource, lastFetchedAt, resetAt, dailyUsage } = data;
-  const now = new Date();
-  const pacing = calculatePacing(totalUsage, limit, now, remaining);
-  const status = classifyStatus(pacing);
-  const recommendedPct = pacing.dayOfMonth / pacing.daysInMonth;
-  const pacingPercent = pacing.expectedByNow > 0 ? (totalUsage / pacing.expectedByNow) * 100 : 0;
-  const legacyPacing = pacing.expectedByNow > 0 ? totalUsage / pacing.expectedByNow : 0;
-  const target = parseFloat((recommendedPct * limit).toFixed(2));
-  const usagePercent = limit > 0 ? Math.min((totalUsage / limit) * 100, 100) : 0;
+  const vm = buildDashboardViewModel(data, now);
+  // extensionUri is optional so unit tests can render the HTML without a real
+  // extension host. When absent, the stylesheet link is omitted — callers in
+  // production always pass a real Uri via webviewProvider.
+  const stylesheetUri = extensionUri
+    ? webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'dashboard.css'))
+    : undefined;
+  const stylesheetLink = stylesheetUri ? `<link rel="stylesheet" href="${stylesheetUri}">` : '';
 
-  // Pre-compute formatted strings (avoids duplicate formatNumber/formatCurrency in inline JS)
-  const fmtN = (n: number) => n % 1 === 0 ? n.toFixed(0) : n.toFixed(2);
-  const totalUsageStr = fmtN(totalUsage);
-  const targetStr = fmtN(target);
-  const remainingStr = fmtN(pacing.remaining);
-  const billedTotalStr = `$${billedTotal.toFixed(2)}`;
-  const resetAtLabel = resetAt ? new Date(resetAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : '';
-
-  // Enhanced pacing metrics
-  const allowance = pacing.dailyAllowance.toFixed(2);
-  const formattedPacingBanked = pacing.banked.toFixed(1);
-  const bankedStr = pacing.banked >= 0
-    ? `+${formattedPacingBanked} saved`
-    : `${formattedPacingBanked} overspent`;
-  const bankedClass = pacing.banked >= 0 ? 'ok' : 'danger';
-  const statusEmoji = status === 'ahead' ? '🚀' : status === 'on-track' ? '✓' : status === 'over-budget' ? '🔥' : '💀';
-  const statusLabel = status === 'ahead' ? 'Ahead of schedule' : status === 'on-track' ? 'On track' : status === 'over-budget' ? 'Over budget' : 'Exhausted';
-
-  const sourceLabel = dataSource === 'api' ? 'Auto-fetched from GitHub API' : 'Manual data';
-  const lastFetchedLabel = lastFetchedAt
-    ? new Date(lastFetchedAt).toLocaleTimeString()
-    : 'Never';
+  // Embed the view-model so the client can bootstrap from the same payload
+  // shape it receives on updates. The initial markup is also pre-rendered so
+  // there's no flash on first open.
+  const bootstrapJson = JSON.stringify(vm).replace(/</g, '\\u003c');
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <title>Premium Request Analytics</title>
-  <style nonce="${nonce}">
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-      font-size: var(--vscode-font-size, 0.8125rem);
-      color: var(--vscode-foreground);
-      background-color: var(--vscode-editor-background);
-      padding: 1.5rem 2rem;
-      line-height: 1.5;
-    }
-
-    .header {
-      margin-bottom: 1.5rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-    }
-
-    .header-left h1 {
-      font-size: 1.25rem;
-      font-weight: 600;
-      color: var(--vscode-foreground);
-      margin-bottom: 0.25rem;
-    }
-
-    .header-left .subtitle {
-      font-size: 0.8125rem;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-
-    .data-source {
-      font-size: 0.6875rem;
-      color: var(--vscode-descriptionForeground);
-      text-align: right;
-    }
-
-    .data-source .source-badge {
-      display: inline-block;
-      padding: 0.125rem 0.5rem;
-      border-radius: 0.75rem;
-      font-size: 0.625rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.03125rem;
-    }
-
-    .source-badge.api {
-      background-color: rgba(63, 185, 80, 0.15);
-      color: var(--vscode-terminal-ansiGreen, #3fb950);
-    }
-
-    .source-badge.manual {
-      background-color: rgba(210, 153, 34, 0.15);
-      color: var(--vscode-terminal-ansiYellow, #d29922);
-    }
-
-    .cards {
-      display: flex;
-      gap: 1rem;
-      margin-bottom: 1.5rem;
-      flex-wrap: wrap;
-    }
-
-    .card {
-      flex: 1;
-      min-width: 13.75rem;
-      background-color: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
-      border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
-      border-radius: 0.5rem;
-      padding: 1.25rem;
-    }
-
-    .card-label {
-      font-size: 0.75rem;
-      color: var(--vscode-descriptionForeground);
-      margin-bottom: 0.5rem;
-      text-transform: uppercase;
-      letter-spacing: 0.03125rem;
-      font-weight: 500;
-    }
-
-    .card-value {
-      font-size: 1.75rem;
-      font-weight: 600;
-      color: var(--vscode-foreground);
-      margin-bottom: 0.25rem;
-    }
-
-    .card-value.small {
-      font-size: 1.375rem;
-    }
-
-    .card-detail {
-      font-size: 0.75rem;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .card-link {
-      color: var(--vscode-textLink-foreground);
-      text-decoration: none;
-      font-size: 0.75rem;
-      cursor: pointer;
-    }
-
-    .card-link:hover {
-      text-decoration: underline;
-      color: var(--vscode-textLink-activeForeground);
-    }
-
-    .progress-container {
-      margin-top: 0.75rem;
-    }
-
-    .progress-bar-bg {
-      width: 100%;
-      height: 0.5rem;
-      background-color: var(--vscode-progressBar-background, rgba(128,128,128,0.2));
-      border-radius: 0.25rem;
-      overflow: hidden;
-      position: relative;
-    }
-
-    .progress-bar-bg::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-color: var(--vscode-input-background, rgba(128,128,128,0.15));
-      border-radius: 0.25rem;
-    }
-
-    .progress-bar-fill {
-      height: 100%;
-      border-radius: 0.25rem;
-      position: relative;
-      z-index: 1;
-      transition: width 0.3s ease;
-    }
-
-    .progress-bar-fill.ok {
-      background-color: var(--vscode-terminal-ansiGreen, #3fb950);
-    }
-
-    .progress-bar-fill.warning {
-      background-color: var(--vscode-terminal-ansiYellow, #d29922);
-    }
-
-    .progress-bar-fill.danger {
-      background-color: var(--vscode-terminal-ansiRed, #f85149);
-    }
-
-    .progress-meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-top: 0.5rem;
-    }
-
-    .progress-meta span {
-      font-size: 0.75rem;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .pacing-badge {
-      display: inline-block;
-      padding: 0.125rem 0.5rem;
-      border-radius: 0.75rem;
-      font-size: 0.6875rem;
-      font-weight: 600;
-    }
-
-    .pacing-badge.ok {
-      background-color: rgba(63, 185, 80, 0.15);
-      color: var(--vscode-terminal-ansiGreen, #3fb950);
-    }
-
-    .pacing-badge.warning {
-      background-color: rgba(210, 153, 34, 0.15);
-      color: var(--vscode-terminal-ansiYellow, #d29922);
-    }
-
-    .pacing-badge.danger {
-      background-color: rgba(248, 81, 73, 0.15);
-      color: var(--vscode-terminal-ansiRed, #f85149);
-    }
-
-    /* Daily Budget Section */
-    .daily-budget {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-      margin-bottom: 1.5rem;
-    }
-
-    .daily-budget .budget-card {
-      background-color: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
-      border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
-      border-radius: 0.5rem;
-      padding: 1.25rem;
-    }
-
-    .daily-budget .budget-card h2 {
-      font-size: 1rem;
-      font-weight: 600;
-      margin-bottom: 1rem;
-      color: var(--vscode-foreground);
-    }
-
-    .budget-stat {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      padding: 0.375rem 0;
-      border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, rgba(128,128,128,0.15)));
-    }
-
-    .budget-stat:last-child {
-      border-bottom: none;
-    }
-
-    .budget-stat-label {
-      font-size: 0.75rem;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .budget-stat-value {
-      font-size: 0.875rem;
-      font-weight: 600;
-      color: var(--vscode-foreground);
-      font-variant-numeric: tabular-nums;
-    }
-
-    @media (max-width: 37.5rem) {
-      .daily-budget {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .metrics-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
-      gap: 0.75rem;
-      margin-top: 1rem;
-    }
-
-    .metric-item {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.75rem;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .metric-item .metric-value {
-      font-weight: 600;
-      color: var(--vscode-foreground);
-    }
-
-    .table-section {
-      margin-top: 0.5rem;
-    }
-
-    .table-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      margin-bottom: 0.75rem;
-      gap: 0.5rem;
-    }
-
-    .table-header h2 {
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--vscode-foreground);
-    }
-
-    .table-header .date-range {
-      font-size: 0.75rem;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-
-    thead th {
-      text-align: left;
-      font-size: 0.6875rem;
-      font-weight: 600;
-      color: var(--vscode-descriptionForeground);
-      text-transform: uppercase;
-      letter-spacing: 0.03125rem;
-      padding: 0.5rem 0.75rem;
-      border-bottom: 0.125rem solid var(--vscode-panel-border, var(--vscode-widget-border));
-    }
-
-    thead th.num {
-      text-align: right;
-    }
-
-    tbody td {
-      padding: 0.625rem 0.75rem;
-      font-size: 0.8125rem;
-      border-bottom: 0.0625rem solid var(--vscode-panel-border, var(--vscode-widget-border, rgba(128,128,128,0.2)));
-    }
-
-    tbody td.model-name {
-      font-weight: 500;
-      color: var(--vscode-foreground);
-    }
-
-    tbody td.num {
-      text-align: right;
-      font-variant-numeric: tabular-nums;
-      color: var(--vscode-foreground);
-    }
-
-    tbody td.actions {
-      text-align: center;
-      white-space: nowrap;
-    }
-
-    tfoot td {
-      padding: 0.625rem 0.75rem;
-      font-size: 0.8125rem;
-      font-weight: 600;
-      border-top: 0.125rem solid var(--vscode-panel-border, var(--vscode-widget-border));
-      color: var(--vscode-foreground);
-    }
-
-    tfoot td.num {
-      text-align: right;
-      font-variant-numeric: tabular-nums;
-    }
-
-    tbody tr:hover {
-      background-color: var(--vscode-list-hoverBackground, rgba(128,128,128,0.07));
-    }
-
-    .icon-btn {
-      background: none;
-      border: none;
-      cursor: pointer;
-      padding: 0.125rem 0.375rem;
-      font-size: 0.8125rem;
-      color: var(--vscode-descriptionForeground);
-      border-radius: 0.25rem;
-      line-height: 1;
-    }
-
-    .icon-btn:hover {
-      background-color: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15));
-      color: var(--vscode-foreground);
-    }
-
-    .remove-btn:hover {
-      color: var(--vscode-terminal-ansiRed, #f85149);
-    }
-
-    .empty-state {
-      text-align: center;
-      padding: 2rem 1rem;
-      color: var(--vscode-descriptionForeground);
-      font-size: 0.8125rem;
-    }
-
-    .empty-state a {
-      color: var(--vscode-textLink-foreground);
-    }
-
-    /* Add Model Form */
-    .add-form {
-      margin-top: 1.5rem;
-      background-color: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
-      border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
-      border-radius: 0.5rem;
-      padding: 1.25rem;
-    }
-
-    .add-form h3 {
-      font-size: 1rem;
-      font-weight: 600;
-      margin-bottom: 1rem;
-      color: var(--vscode-foreground);
-    }
-
-    .form-row {
-      display: flex;
-      gap: 0.75rem;
-      flex-wrap: wrap;
-      margin-bottom: 0.75rem;
-      align-items: end;
-    }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-    }
-
-    .form-group label {
-      font-size: 0.6875rem;
-      color: var(--vscode-descriptionForeground);
-      text-transform: uppercase;
-      letter-spacing: 0.03125rem;
-      font-weight: 500;
-    }
-
-    .form-group input {
-      background-color: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-      border-radius: 0.25rem;
-      padding: 0.375rem 0.625rem;
-      font-size: 0.8125rem;
-      font-family: inherit;
-      outline: none;
-    }
-
-    .form-group input:focus {
-      border-color: var(--vscode-focusBorder);
-    }
-
-    .form-group input[type=\"text\"] {
-      min-width: 12.5rem;
-    }
-
-    .form-group input[type=\"number\"] {
-      width: 7.5rem;
-    }
-
-    .currency-wrapper {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-    }
-
-    .currency-wrapper .currency-prefix {
-      position: absolute;
-      left: 0.625rem;
-      font-size: 0.8125rem;
-      color: var(--vscode-descriptionForeground);
-      pointer-events: none;
-      z-index: 1;
-    }
-
-    .currency-wrapper input {
-      padding-left: 1.375rem !important;
-      width: 7.5rem;
-    }
-
-    .currency-wrapper input[readonly] {
-      opacity: 0.7;
-      cursor: default;
-    }
-
-    .btn {
-      padding: 0.375rem 1rem;
-      border-radius: 0.25rem;
-      font-size: 0.8125rem;
-      font-family: inherit;
-      cursor: pointer;
-      border: none;
-      font-weight: 500;
-    }
-
-    .btn-primary {
-      background-color: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-    }
-
-    .btn-primary:hover {
-      background-color: var(--vscode-button-hoverBackground);
-    }
-
-    .btn-secondary {
-      background-color: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
-    }
-
-    .btn-secondary:hover {
-      background-color: var(--vscode-button-secondaryHoverBackground);
-    }
-
-    .action-btn {
-      padding: 0.375rem 1rem;
-      border-radius: 0.25rem;
-      font-size: 0.8125rem;
-      font-family: inherit;
-      cursor: pointer;
-      border: none;
-      font-weight: 500;
-      background-color: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      text-decoration: none;
-    }
-
-    .action-btn:hover {
-      background-color: var(--vscode-button-hoverBackground);
-    }
-
-    .action-btn-secondary {
-      padding: 0.375rem 1rem;
-      border-radius: 0.25rem;
-      font-size: 0.8125rem;
-      font-family: inherit;
-      cursor: pointer;
-      border: 1px solid var(--vscode-button-background);
-      font-weight: 500;
-      background-color: transparent;
-      color: var(--vscode-button-background);
-      text-decoration: none;
-    }
-
-    .action-btn-secondary:hover {
-      background-color: var(--vscode-button-secondaryHoverBackground);
-    }
-
-    .limit-edit {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.375rem;
-    }
-
-    .limit-edit input {
-      background-color: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-      border-radius: 0.25rem;
-      padding: 0.125rem 0.5rem;
-      font-size: 1rem;
-      font-family: inherit;
-      width: 5rem;
-      outline: none;
-      font-weight: 600;
-    }
-
-    .limit-edit input:focus {
-      border-color: var(--vscode-focusBorder);
-    }
-
-    .form-buttons {
-      display: flex;
-      gap: 0.5rem;
-      align-items: end;
-    }
-
-    .collapsible-toggle {
-      cursor: pointer;
-      user-select: none;
-      display: flex;
-      align-items: center;
-      gap: 0.375rem;
-    }
-
-    .collapsible-toggle .arrow {
-      transition: transform 0.2s;
-      font-size: 0.625rem;
-    }
-
-    .collapsible-toggle .arrow.open {
-      transform: rotate(90deg);
-    }
-
-    .collapsible-content {
-      overflow: hidden;
-      max-height: 0;
-      transition: max-height 0.3s ease;
-    }
-
-    .collapsible-content.open {
-      max-height: 2000px;
-    }
-
-    @media (max-width: 37.5rem) {
-      body {
-        padding: 1rem;
-      }
-      .cards {
-        flex-direction: column;
-      }
-      .card {
-        min-width: unset;
-      }
-    }
-
-    /* Billing Summary Section */
-    .billing-summary {
-      background-color: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
-      border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
-      border-radius: 0.5rem;
-      padding: 1.25rem;
-      margin-bottom: 1.5rem;
-    }
-
-    .billing-summary h2 {
-      font-size: 1rem;
-      font-weight: 600;
-      margin-bottom: 1rem;
-      color: var(--vscode-foreground);
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .billing-summary tbody td.sku-name {
-      font-weight: 500;
-      color: var(--vscode-foreground);
-    }
-
-    .billing-summary .empty-state {
-      text-align: center;
-      padding: 1.5rem 1rem;
-      color: var(--vscode-descriptionForeground);
-      font-size: 0.8125rem;
-    }
-
-    .billing-summary .empty-state a {
-      color: var(--vscode-textLink-foreground);
-      text-decoration: none;
-    }
-
-    .billing-summary .empty-state a:hover {
-      text-decoration: underline;
-    }
-
-    .token-guide {
-      max-width: 42rem;
-      margin: 0 auto;
-      text-align: left;
-      border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
-      border-radius: 0.625rem;
-      background: var(--vscode-editorWidget-background, rgba(127,127,127,0.06));
-      padding: 1rem;
-    }
-
-    .token-guide-title {
-      margin-bottom: 0.375rem;
-      font-size: 0.9375rem;
-      font-weight: 700;
-      color: var(--vscode-foreground);
-    }
-
-    .token-guide-subtitle {
-      margin-bottom: 0.875rem;
-      color: var(--vscode-descriptionForeground);
-      line-height: 1.5;
-    }
-
-    .token-guide-panel {
-      margin-bottom: 0.75rem;
-      border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
-      border-radius: 0.5rem;
-      padding: 0.75rem;
-      background: var(--vscode-editor-inactiveSelectionBackground, rgba(255,255,255,0.04));
-    }
-
-    .token-guide-panel h3 {
-      font-size: 0.8125rem;
-      margin-bottom: 0.375rem;
-      color: var(--vscode-foreground);
-    }
-
-    .token-guide-panel p {
-      margin-bottom: 0.625rem;
-      color: var(--vscode-descriptionForeground);
-      line-height: 1.5;
-    }
-
-    .token-guide ol {
-      margin: 0 0 0.625rem 1.25rem;
-      line-height: 1.8;
-    }
-
-    .token-guide-actions {
-      display: flex;
-      gap: 0.5rem;
-      flex-wrap: wrap;
-      margin-top: 0.5rem;
-    }
-
-    .token-guide details {
-      margin-top: 0.5rem;
-    }
-
-    .token-guide summary {
-      cursor: pointer;
-      font-weight: 600;
-      color: var(--vscode-foreground);
-      padding: 0.25rem 0;
-    }
-  </style>
+  ${stylesheetLink}
 </head>
 <body>
   <div class="header">
     <div class="header-left">
       <h1>Premium request analytics</h1>
-      <p class="subtitle">${dataSource === 'api'
-        ? 'Live usage data from GitHub Copilot API.'
-        : 'Manual data mode. Click Refresh to fetch from GitHub API.'}${resetAtLabel ? ` Quota resets ${resetAtLabel}.` : ''}</p>
+      <p class="subtitle" id="subtitleText">${escapeHtml(vm.subtitle)}</p>
     </div>
     <div class="header-right">
       <div class="data-source">
-        <span class="source-badge ${dataSource}">${dataSource === 'api' ? 'Live' : 'Manual'}</span>
-        <br><span style="font-size: 10px;">Last: ${lastFetchedLabel}</span>
+        <span class="source-badge ${vm.dataSource}" id="sourceBadge">${vm.dataSourceLabel}</span>
+        <br><span style="font-size: 10px;">Last: <span id="lastFetchedLabel">${escapeHtml(vm.lastFetchedLabel)}</span></span>
       </div>
       <button class="btn btn-primary" id="refreshBtn" title="Fetch latest data from GitHub API">Refresh</button>
     </div>
@@ -774,34 +180,34 @@ export function getWebviewHtml(
   <div class="cards">
     <div class="card">
       <div class="card-label">Daily Allowance</div>
-      <div class="card-value">${allowance}<span style="font-size: 1rem; font-weight: 400; color: var(--vscode-descriptionForeground);"> /day</span></div>
-      <div class="card-detail">${statusEmoji} ${statusLabel}${pacing.multiplier !== 1 ? ` &middot; ${pacing.multiplier.toFixed(1)}x base rate` : ''}</div>
+      <div class="card-value"><span id="allowanceValue">${vm.allowance}</span><span style="font-size: 1rem; font-weight: 400; color: var(--vscode-descriptionForeground);"> /day</span></div>
+      <div class="card-detail" id="allowanceDetail">${escapeHtml(vm.cardDetail)}</div>
     </div>
     <div class="card">
       <div class="card-label">Included premium requests consumed</div>
       <div class="card-value small">
-        ${totalUsageStr}
+        <span id="totalUsageValue">${vm.totalUsageStr}</span>
         <span style="font-size: 1rem; font-weight: 400; color: var(--vscode-descriptionForeground);">of
           <span class="limit-edit">
-            <input type="number" id="limitInput" value="${limit}" min="1" max="100000" step="1" title="Edit monthly limit" />
+            <input type="number" id="limitInput" value="${vm.limit}" min="1" max="100000" step="1" title="Edit monthly limit" />
           </span>
           included
         </span>
       </div>
       <div class="progress-container">
         <div class="progress-bar-bg">
-          <div class="progress-bar-fill ${getProgressClass(legacyPacing)}" style="width: ${usagePercent.toFixed(1)}%;"></div>
+          <div class="progress-bar-fill ${vm.pacingClass}" id="progressBarFill" style="width: ${vm.usagePercentStr}%;"></div>
         </div>
         <div class="progress-meta">
-          <span>Target for today: ${targetStr} (${(recommendedPct * 100).toFixed(1)}% of month)</span>
-          <span class="pacing-badge ${getProgressClass(legacyPacing)}">Pacing: ${pacingPercent.toFixed(1)}%</span>
+          <span id="targetText">${escapeHtml(vm.targetText)}</span>
+          <span class="pacing-badge ${vm.pacingClass}" id="pacingBadge">${escapeHtml(vm.pacingBadgeText)}</span>
         </div>
       </div>
     </div>
     <div class="card">
       <div class="card-label">Remaining</div>
-      <div class="card-value small">${remainingStr}</div>
-      <div class="card-detail">${pacing.daysRemaining} days left &middot; Day ${pacing.dayOfMonth}/${pacing.daysInMonth}</div>
+      <div class="card-value small" id="remainingValue">${vm.remainingStr}</div>
+      <div class="card-detail" id="remainingDetail">${escapeHtml(vm.remainingDetail)}</div>
     </div>
   </div>
 
@@ -810,51 +216,51 @@ export function getWebviewHtml(
       <h2>Daily rates</h2>
       <div class="budget-stat">
         <span class="budget-stat-label">Base rate</span>
-        <span class="budget-stat-value">${pacing.baseDailyBudget.toFixed(2)}/day</span>
+        <span class="budget-stat-value" id="baseRateVal">${vm.baseRate}</span>
       </div>
       <div class="budget-stat">
         <span class="budget-stat-label">Past average</span>
-        <span class="budget-stat-value">${pacing.avgDailyUsage.toFixed(2)}/day</span>
+        <span class="budget-stat-value" id="pastAvgVal">${vm.pastAvg}</span>
       </div>
       <div class="budget-stat">
         <span class="budget-stat-label">Today's allowance</span>
-        <span class="budget-stat-value">${pacing.dailyAllowance.toFixed(2)}/day</span>
+        <span class="budget-stat-value" id="todayAllowanceVal">${vm.todayAllowance}</span>
       </div>
       <div class="budget-stat">
         <span class="budget-stat-label">Multiplier</span>
-        <span class="budget-stat-value">${pacing.multiplier.toFixed(2)}x</span>
+        <span class="budget-stat-value" id="multiplierVal">${vm.multiplier}</span>
       </div>
-      ${dailyUsage !== undefined ? `<div class="budget-stat">
+      <div class="budget-stat" id="dailyUsageRow" style="${vm.dailyUsage === null ? 'display:none' : ''}">
         <span class="budget-stat-label">Today's usage (API)</span>
-        <span class="budget-stat-value">${fmtN(dailyUsage)}</span>
-      </div>` : ''}
+        <span class="budget-stat-value" id="dailyUsageVal">${vm.dailyUsage ?? ''}</span>
+      </div>
     </div>
     <div class="budget-card">
       <h2>Forecast</h2>
       <div class="budget-stat">
         <span class="budget-stat-label">Banked vs expected</span>
-        <span class="budget-stat-value ${bankedClass}">${bankedStr}</span>
+        <span class="budget-stat-value ${vm.banked.className}" id="bankedVal">${escapeHtml(vm.banked.text)}</span>
       </div>
       <div class="budget-stat">
         <span class="budget-stat-label">Projected month end</span>
-        <span class="budget-stat-value">~${pacing.projectedEnd.toFixed(1)} / ${limit}${pacing.projectedEnd <= limit ? ' &#x2714;' : ' &#x26A0;'}</span>
+        <span class="budget-stat-value" id="projectedVal">${vm.projected}</span>
       </div>
       <div class="budget-stat">
         <span class="budget-stat-label">Progress</span>
-        <span class="budget-stat-value">Day ${pacing.dayOfMonth}/${pacing.daysInMonth} &middot; ${pacing.daysRemaining} left</span>
+        <span class="budget-stat-value" id="progressVal">${escapeHtml(vm.progress)}</span>
       </div>
       <div class="budget-stat">
         <span class="budget-stat-label">Time of day</span>
-        <span class="budget-stat-value">${(pacing.timeOfDayProgress * 100).toFixed(1)}%</span>
+        <span class="budget-stat-value" id="timeOfDayVal">${vm.timeOfDay}</span>
       </div>
-      ${pacing.overageCost > 0 ? `<div class="budget-stat">
+      <div class="budget-stat" id="overageRow" style="${vm.overage === null ? 'display:none' : ''}">
         <span class="budget-stat-label">Overage</span>
-        <span class="budget-stat-value danger">${pacing.overageRequests} reqs ($${pacing.overageCost.toFixed(2)})</span>
-      </div>` : ''}
-      ${billedTotal > 0 ? `<div class="budget-stat">
+        <span class="budget-stat-value danger" id="overageVal">${vm.overage ?? ''}</span>
+      </div>
+      <div class="budget-stat" id="billedTotalRow" style="${vm.billedTotal === null ? 'display:none' : ''}">
         <span class="budget-stat-label">Billed total</span>
-        <span class="budget-stat-value">${billedTotalStr}</span>
-      </div>` : ''}
+        <span class="budget-stat-value" id="billedTotalVal">${vm.billedTotal ?? ''}</span>
+      </div>
     </div>
   </div>
 
@@ -862,8 +268,8 @@ export function getWebviewHtml(
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    const INITIAL_VM = ${bootstrapJson};
 
-    // Refresh button
     const refreshBtn = document.getElementById('refreshBtn');
     refreshBtn.addEventListener('click', () => {
       refreshBtn.disabled = true;
@@ -871,7 +277,6 @@ export function getWebviewHtml(
       vscode.postMessage({ type: 'refresh' });
     });
 
-    // Limit editing
     const limitInput = document.getElementById('limitInput');
     let limitDebounce;
     limitInput.addEventListener('change', () => {
@@ -884,7 +289,62 @@ export function getWebviewHtml(
       }
     });
 
-    // Billing data elements
+    // --- View-model patching (no full HTML rebuild; see CODE_REVIEW H3) ---
+    function setText(id, text) {
+      const el = document.getElementById(id);
+      if (el && el.textContent !== text) { el.textContent = text; }
+    }
+    function setClass(id, base, modifier) {
+      const el = document.getElementById(id);
+      if (!el) { return; }
+      el.className = base + ' ' + modifier;
+    }
+    function setRow(id, shouldShow, textId, text) {
+      const row = document.getElementById(id);
+      if (!row) { return; }
+      row.style.display = shouldShow ? '' : 'none';
+      if (shouldShow && textId) { setText(textId, text); }
+    }
+    function patchViewModel(vm) {
+      setText('subtitleText', vm.subtitle);
+      setText('lastFetchedLabel', vm.lastFetchedLabel);
+      const badge = document.getElementById('sourceBadge');
+      if (badge) {
+        badge.className = 'source-badge ' + vm.dataSource;
+        badge.textContent = vm.dataSourceLabel;
+      }
+      setText('allowanceValue', vm.allowance);
+      setText('allowanceDetail', vm.cardDetail);
+      setText('totalUsageValue', vm.totalUsageStr);
+      if (document.activeElement !== limitInput) {
+        if (String(vm.limit) !== limitInput.value) { limitInput.value = String(vm.limit); }
+      }
+      const fill = document.getElementById('progressBarFill');
+      if (fill) {
+        fill.className = 'progress-bar-fill ' + vm.pacingClass;
+        fill.style.width = vm.usagePercentStr + '%';
+      }
+      setText('targetText', vm.targetText);
+      setClass('pacingBadge', 'pacing-badge', vm.pacingClass);
+      setText('pacingBadge', vm.pacingBadgeText);
+      setText('remainingValue', vm.remainingStr);
+      setText('remainingDetail', vm.remainingDetail);
+      setText('baseRateVal', vm.baseRate);
+      setText('pastAvgVal', vm.pastAvg);
+      setText('todayAllowanceVal', vm.todayAllowance);
+      setText('multiplierVal', vm.multiplier);
+      setRow('dailyUsageRow', vm.dailyUsage !== null, 'dailyUsageVal', vm.dailyUsage || '');
+      setClass('bankedVal', 'budget-stat-value', vm.banked.className);
+      setText('bankedVal', vm.banked.text);
+      setText('projectedVal', vm.projected);
+      setText('progressVal', vm.progress);
+      setText('timeOfDayVal', vm.timeOfDay);
+      setRow('overageRow', vm.overage !== null, 'overageVal', vm.overage || '');
+      setRow('billedTotalRow', vm.billedTotal !== null, 'billedTotalVal', vm.billedTotal || '');
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh';
+    }
+
     const billingTableBody = document.getElementById('billingTableBody');
     const billingTotalRow = document.getElementById('billingTotalRow');
     const billingTable = document.getElementById('billingTable');
@@ -895,7 +355,6 @@ export function getWebviewHtml(
     const tokenGuideTitle = document.getElementById('tokenGuideTitle');
     const tokenGuideSubtitle = document.getElementById('tokenGuideSubtitle');
 
-    // Token guide event handlers (attached once at init on pre-rendered elements)
     document.getElementById('quickSetupBtn').addEventListener('click', function() {
       vscode.postMessage({ type: 'openExternalThenSetToken', url: 'https://github.com/settings/personal-access-tokens/new?name=Copilot+Tracker&description=Used+by+the+Copilot+Premium+Tracker+VS+Code+extension+to+read+billing+data&expires_in=90&plan=read' });
     });
@@ -909,7 +368,6 @@ export function getWebviewHtml(
       });
     });
 
-    // DOM helpers — avoid innerHTML for XSS safety
     function addCell(row, text, cls) {
       var td = document.createElement('td');
       if (cls) { td.className = cls; }
@@ -919,9 +377,12 @@ export function getWebviewHtml(
     function fmtNum(n) { return n % 1 === 0 ? n.toFixed(0) : n.toFixed(2); }
     function fmtCur(n) { return '$' + n.toFixed(2); }
 
-    // Listen for messages from extension
     window.addEventListener('message', (event) => {
       const msg = event.data;
+      if (msg.type === 'updateData') {
+        patchViewModel(msg.viewModel);
+        return;
+      }
       if (msg.type === 'billingRangeResult') {
         billingLoading.style.display = 'none';
         const items = msg.items || [];
@@ -984,20 +445,14 @@ export function getWebviewHtml(
         billingTable.style.display = '';
       }
     });
+
+    void INITIAL_VM;
   </script>
 </body>
 </html>`;
 }
 
-function getProgressClass(pacing: number): string {
-  if (pacing > 1.0) { return 'danger'; }
-  if (pacing > 0.8) { return 'warning'; }
-  return 'ok';
-}
-
 function buildBillingSummarySection(): string {
-  // Static rows removed — the JS message handler populates the table dynamically
-  // from the premium billing API response (billingRangeResult message).
   return `
   <div class="billing-summary">
     <h2>Billing summary <span class="source-badge api" style="font-size:0.625rem;">API</span></h2>
