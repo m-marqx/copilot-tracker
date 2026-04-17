@@ -322,6 +322,23 @@ function refreshDashboard(context: vscode.ExtensionContext): void {
   setMessageHandler(async (msg) => handleWebviewMessage(msg, context));
   // Auto-send cached premium billing data so model names are detailed on load
   sendCachedBillingToWebview();
+  // Ensure daily billing is fetched so "Today's usage" renders
+  ensureDailyBilling(context);
+}
+
+function ensureDailyBilling(context: vscode.ExtensionContext): void {
+  const cached = dataService.getCachedDailyBilling();
+  if (cached.length > 0) { return; } // Already have data
+  // Fetch daily billing and re-render dashboard with updated dailyUsage
+  dataService.fetchDailyBilling(false)
+    .then(() => {
+      if (hasDashboard()) {
+        showDashboard(dataService.getUsageData(), context.extensionUri);
+        setMessageHandler(async (msg) => handleWebviewMessage(msg, context));
+      }
+      refreshUI();
+    })
+    .catch(() => {}); // Non-critical — dashboard still works without daily usage
 }
 
 function sendCachedBillingToWebview(): void {

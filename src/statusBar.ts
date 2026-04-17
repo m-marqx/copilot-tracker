@@ -63,6 +63,7 @@ export function updateStatusBar(item: vscode.StatusBarItem, data: UsageData): vo
     `Copilot Premium: ${totalUsage} / ${limit} (${usedPct}%)`,
     `Daily allowance: ${pacing.dailyAllowance.toFixed(1)} requests/day`,
     remainTodayStr,
+    ...(data.dailyUsage !== undefined ? [`Today's usage: ${data.dailyUsage}`] : []),
     `${bankedStr} vs expected`,
     `Projected: ~${pacing.projectedEnd.toFixed(1)} by month end`,
     `Day ${pacing.dayOfMonth}/${pacing.daysInMonth} \u00b7 ${pacing.daysRemaining} days left`,

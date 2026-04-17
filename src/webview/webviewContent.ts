@@ -7,7 +7,7 @@ export function getWebviewHtml(
   webview: vscode.Webview,
   nonce: string
 ): string {
-  const { totalUsage, limit, remaining, billedTotal, models, dateRange, dataSource, lastFetchedAt, resetAt } = data;
+  const { totalUsage, limit, remaining, billedTotal, models, dateRange, dataSource, lastFetchedAt, resetAt, dailyUsage } = data;
   const now = new Date();
   const pacing = calculatePacing(totalUsage, limit, now, remaining);
   const status = classifyStatus(pacing);
@@ -824,6 +824,10 @@ export function getWebviewHtml(
         <span class="budget-stat-label">Multiplier</span>
         <span class="budget-stat-value">${pacing.multiplier.toFixed(2)}x</span>
       </div>
+      ${dailyUsage !== undefined ? `<div class="budget-stat">
+        <span class="budget-stat-label">Today's usage (API)</span>
+        <span class="budget-stat-value">${fmtN(dailyUsage)}</span>
+      </div>` : ''}
     </div>
     <div class="budget-card">
       <h2>Forecast</h2>
