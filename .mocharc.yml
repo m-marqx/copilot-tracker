@@ -1,0 +1,7 @@
+require:
+  - tsx
+  - ./src/__tests__/setup.ts
+spec: src/__tests__/**/*.test.ts
+timeout: 10000
+recursive: true
+rootHooks: true

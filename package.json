@@ -31,7 +31,10 @@
       "properties": {
         "copilot-premium-tracker.statusBarMode": {
           "type": "string",
-          "enum": ["pacer", "classic"],
+          "enum": [
+            "pacer",
+            "classic"
+          ],
           "default": "pacer",
           "enumDescriptions": [
             "Pacer bar with today marker and remaining-today count",
@@ -85,9 +88,16 @@
     "lint": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^25.5.0",
+    "@types/sinon": "^21.0.1",
     "@types/vscode": "^1.85.0",
+    "chai": "^6.2.2",
     "esbuild": "^0.24.0",
+    "mocha": "^11.7.5",
+    "sinon": "^21.1.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.0"
   },
   "dependencies": {
