@@ -1,9 +1,12 @@
 import * as vscode from 'vscode';
 import { DataService, UsageModel } from './dataService';
 import { TokenExpiredError, RateLimitError } from './api';
-import { createStatusBarItem, updateStatusBar } from './statusBar';
+import { createStatusBarItem, updateStatusBar, initStatusBarMode } from './statusBar';
 import { showDashboard, disposeDashboard, setMessageHandler, hasDashboard, postMessageToWebview } from './webview/webviewProvider';
 
+// Module-level singletons for the refresh scheduler. Acceptable for an
+// extension's single-activation lifetime; encapsulating in a RefreshScheduler
+// class would improve unit-testability. See CODE_REVIEW L1.
 let statusBarItem: vscode.StatusBarItem;
 let dataService: DataService;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -14,10 +17,16 @@ let disposed = false;
 const GITHUB_TOKEN_URL = 'https://github.com/settings/personal-access-tokens/new?name=Copilot+Tracker&description=Used+by+the+Copilot+Premium+Tracker+VS+Code+extension+to+read+billing+data&expires_in=90&plan=read';
 const BASE_REFRESH_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
+// Hard floor to prevent tight-loop scheduling if timers fire early (clock jumps,
+// wake-from-sleep, Retry-After edge cases). See CODE_REVIEW C4/C5.
+const MIN_REFRESH_DELAY_MS = 30 * 1000; // 30 seconds
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   dataService = new DataService(context.globalState, context.secrets);
   statusBarItem = createStatusBarItem();
+
+  // Read status-bar mode from config before first render.
+  initStatusBarMode();
 
   // Show status bar immediately with cached/default data
   refreshUI();
@@ -105,7 +114,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { dispose: () => { disposed = true; disposeDashboard(); if (refreshTimer) { clearTimeout(refreshTimer); } } },
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('copilot-premium-tracker.statusBarMode')) {
+        initStatusBarMode();
         refreshUI();
+      }
+      if (e.affectsConfiguration('copilot-premium-tracker')) {
+        // Any config change is a good time to drop backoff state so the user
+        // isn't surprised by stale rate-limit/backoff after changing settings.
+        // See PERFORMANCE_REVIEW L3.
+        consecutiveFailures = 0;
+        rateLimitedUntil = 0;
       }
     }),
   );
@@ -120,21 +137,28 @@ async function refreshFromApi(interactive: boolean): Promise<void> {
     // Reset backoff on success
     consecutiveFailures = 0;
   } catch (e) {
-    consecutiveFailures++;
     if (e instanceof TokenExpiredError) {
+      // Auth errors don't benefit from faster retry; don't bump the backoff
+      // counter — the user must act. See CODE_REVIEW M4.
       vscode.window.showWarningMessage(
         'Copilot Tracker: GitHub token expired. Click Refresh to sign in again.',
       );
     } else if (e instanceof RateLimitError) {
+      consecutiveFailures++;
       rateLimitedUntil = Date.now() + e.retryAfter * 1000;
       if (interactive) {
         vscode.window.showWarningMessage(
           `Copilot Tracker: Rate limited. Retrying in ${e.retryAfter}s.`,
         );
       }
-    } else if (interactive) {
-      const msg = e instanceof Error ? e.message : String(e);
-      vscode.window.showErrorMessage(`Copilot Tracker: ${msg}`);
+    } else {
+      // Transient network / 5xx errors: soft bump capped at 1 so a poor-wifi
+      // session can't push us into hour-long backoff. See CODE_REVIEW M4.
+      consecutiveFailures = Math.max(consecutiveFailures, 1);
+      if (interactive) {
+        const msg = e instanceof Error ? e.message : String(e);
+        vscode.window.showErrorMessage(`Copilot Tracker: ${msg}`);
+      }
     }
   }
 
@@ -161,8 +185,9 @@ async function refreshFromApi(interactive: boolean): Promise<void> {
     }
   }
 
-  // Guide user when billing token is needed (404 on billing endpoints)
-  if (dataService.shouldShowBillingTokenNotice()) {
+  // Guide user when billing token is needed (404 on billing endpoints).
+  // Guarded by `interactive` so background timers never pop modal notices.
+  if (interactive && dataService.shouldShowBillingTokenNotice()) {
     const choice = await vscode.window.showInformationMessage(
       'Copilot Tracker: Billing data requires a fine-grained GitHub token with the "Plan" permission (read-only).',
       'Create Token',
@@ -179,12 +204,32 @@ async function refreshFromApi(interactive: boolean): Promise<void> {
 }
 
 function getNextRefreshDelay(): number {
-  if (Date.now() < rateLimitedUntil) {
-    return rateLimitedUntil - Date.now();
+  return computeNextRefreshDelay(Date.now(), rateLimitedUntil, consecutiveFailures);
+}
+
+/**
+ * Pure helper: given the current wall-clock time, the rate-limit deadline,
+ * and the consecutive-failure count, compute the next refresh delay.
+ *
+ * Exported for regression tests (CODE_REVIEW L4):
+ *  - A clock jump that leaves `now >= rateLimitedUntil` must still return at
+ *    least `MIN_REFRESH_DELAY_MS` (no tight-loop).
+ *  - A negative remainder must not underflow into a sub-ms `setTimeout`.
+ */
+export function computeNextRefreshDelay(
+  now: number,
+  rateLimitedUntilMs: number,
+  failures: number,
+  baseMs: number = BASE_REFRESH_INTERVAL_MS,
+  maxMs: number = MAX_REFRESH_INTERVAL_MS,
+  minMs: number = MIN_REFRESH_DELAY_MS,
+): number {
+  if (now < rateLimitedUntilMs) {
+    return Math.max(minMs, rateLimitedUntilMs - now);
   }
-  if (consecutiveFailures === 0) { return BASE_REFRESH_INTERVAL_MS; }
-  const backoff = BASE_REFRESH_INTERVAL_MS * Math.pow(2, consecutiveFailures);
-  return Math.min(backoff, MAX_REFRESH_INTERVAL_MS);
+  if (failures === 0) { return baseMs; }
+  const backoff = baseMs * Math.pow(2, failures);
+  return Math.min(Math.max(backoff, minMs), maxMs);
 }
 
 function scheduleNextRefresh(): void {
@@ -226,7 +271,9 @@ async function handleWebviewMessage(
   switch (msg.type) {
     case 'refresh': {
       dataService.forceRefresh();
+      consecutiveFailures = 0;
       await refreshFromApi(true);
+      scheduleNextRefresh();
       refreshDashboard(context);
       break;
     }
@@ -314,11 +361,15 @@ async function promptSetLimit(context: vscode.ExtensionContext): Promise<void> {
 
 function refreshUI(): void {
   const data = dataService.getUsageData();
-  updateStatusBar(statusBarItem, data);
+  // Share one wall-clock reading across status-bar + dashboard renders
+  // to avoid millisecond drift (PERFORMANCE_REVIEW L2).
+  const now = new Date();
+  updateStatusBar(statusBarItem, data, now);
 }
 
 function refreshDashboard(context: vscode.ExtensionContext): void {
-  showDashboard(dataService.getUsageData(), context.extensionUri);
+  const now = new Date();
+  showDashboard(dataService.getUsageData(), context.extensionUri, now);
   setMessageHandler(async (msg) => handleWebviewMessage(msg, context));
   // Auto-send cached premium billing data so model names are detailed on load
   sendCachedBillingToWebview();
