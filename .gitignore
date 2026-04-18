@@ -4,3 +4,5 @@ dist/**
 tsconfig.json
 esbuild.js
 *.map
+.github/**
+**.vsix
