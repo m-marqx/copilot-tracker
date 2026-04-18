@@ -417,6 +417,7 @@ export function getWebviewHtml(
         billingError.style.display = 'none';
         while (billingTableBody.firstChild) { billingTableBody.removeChild(billingTableBody.firstChild); }
         var totGrossQty = 0, totGrossAmt = 0, totDiscQty = 0, totDiscAmt = 0, totNetQty = 0, totNetAmt = 0;
+        items.sort(function(a, b) { return (b.grossQuantity || 0) - (a.grossQuantity || 0); });
         items.forEach(function(item) {
           totGrossQty += item.grossQuantity || 0;
           totGrossAmt += item.grossAmount || 0;
