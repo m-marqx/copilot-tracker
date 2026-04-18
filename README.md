@@ -3,7 +3,7 @@
 Track your GitHub Copilot premium request usage directly from VS Code — with real-time pacing in the status bar and a full analytics dashboard.
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-^1.85.0-blue)
-![Version](https://img.shields.io/badge/version-0.0.3-green)
+![Version](https://img.shields.io/badge/version-0.0.9-green)
 
 ## Features
 
@@ -79,12 +79,10 @@ pnpm run compile
 
 Then press `F5` in VS Code to launch the Extension Development Host.
 
-### From VSIX
+To run the test suite:
 
 ```bash
-pnpm run compile
-npx @vscode/vsce package
-code --install-extension copilot-premium-tracker-0.0.2.vsix
+npm test
 ```
 
 ## Requirements
@@ -92,7 +90,3 @@ code --install-extension copilot-premium-tracker-0.0.2.vsix
 - VS Code 1.85.0 or later
 - A GitHub account signed into VS Code (for automatic API fetching)
 - A GitHub Copilot subscription (Individual, Business, or Enterprise)
-
-## License
-
-See [LICENSE](LICENSE) for details.

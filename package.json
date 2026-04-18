@@ -2,7 +2,7 @@
   "name": "copilot-premium-tracker",
   "displayName": "Copilot Premium Request Tracker",
   "description": "Track GitHub Copilot Premium request usage with pacing progress in the status bar and a detailed analytics dashboard.",
-  "version": "0.0.7",
+  "version": "0.0.9",
   "author": "Archie Marques",
   "publisher": "m-marqx",
   "icon": "assets/icon.png",
